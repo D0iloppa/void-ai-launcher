@@ -6,8 +6,17 @@
   "bin": {
     "void": "./launcher.js"
   },
+  "files": [
+    "launcher.js",
+    "lib/",
+    "config.yml",
+    "cmd_generator.sh",
+    "CLAUDE.md"
+  ],
   "scripts": {
-    "start": "node launcher.js"
+    "start": "node launcher.js",
+    "check": "node --check launcher.js && node --check lib/*.js",
+    "build": "VOID_BUILD_NONINTERACTIVE=1 bash ./cmd_generator.sh"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"

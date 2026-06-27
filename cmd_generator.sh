@@ -5,6 +5,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_BIN="/usr/local/bin/void"
 NODE_MIN=18
+NONINTERACTIVE="${VOID_BUILD_NONINTERACTIVE:-0}"
+NPM_CACHE_DIR="${VOID_NPM_CACHE_DIR:-${TMPDIR:-/tmp}/void-npm-cache}"
+REQUIRED_PACKAGES=(
+  "@anthropic-ai/sdk"
+  "@google/generative-ai"
+  "node-pty"
+  "openai"
+)
 
 # ── ANSI ─────────────────────────────────────────────────
 G='\033[38;2;0;230;118m'   # signal green
@@ -19,6 +27,24 @@ ok()   { echo -e "  ${G}✓${RST} $1"; }
 step() { echo -e "\n${G}${B}──${RST}${B} $1${RST}"; }
 warn() { echo -e "  ${Y}⚠${RST}  $1"; }
 err()  { echo -e "  ${R}✗${RST}  $1"; exit 1; }
+
+should_prompt() {
+  [[ "$NONINTERACTIVE" != "1" && -t 0 ]]
+}
+
+ensure_sudo() {
+  if [ -w "/usr/local/bin" ]; then
+    return
+  fi
+
+  step "sudo 권한 확인"
+  if should_prompt; then
+    sudo -v
+  else
+    sudo -n -v
+  fi
+  ok "sudo 권한 확인 완료"
+}
 
 # ── 헤더 ─────────────────────────────────────────────────
 echo -e ""
@@ -48,28 +74,19 @@ if echo "$NODE_BIN" | grep -q ".nvm"; then
   warn "nvm 경로 감지됨. ${G}sudo void${RST}${Y} 사용 시 PATH 문제를 wrapper 스크립트로 해결합니다.${RST}"
 fi
 
+ensure_sudo
+
 # ── 2. npm 의존성 ─────────────────────────────────────────
 step "의존성 설치"
 
 cd "$SCRIPT_DIR"
-npm install --silent
+npm_config_cache="$NPM_CACHE_DIR" npm install --silent
 ok "js-yaml 설치 완료"
 
-# ── 3. 선택적 의존성 ──────────────────────────────────────
-echo ""
-echo -e "  ${M}선택적 의존성 (Prompt 모드):${RST}"
-echo -e "  ${M}설치하지 않아도 나머지 기능은 모두 동작합니다.${RST}"
-echo ""
-
-read -rp "  @anthropic-ai/sdk 설치? (Claude API) [y/N] " ans
-if [[ "$ans" =~ ^[Yy]$ ]]; then
-  npm install --save-optional @anthropic-ai/sdk --silent && ok "@anthropic-ai/sdk 설치됨"
-fi
-
-read -rp "  openai 설치? (GPT API) [y/N] " ans
-if [[ "$ans" =~ ^[Yy]$ ]]; then
-  npm install --save-optional openai --silent && ok "openai 설치됨"
-fi
+# ── 3. 런타임 의존성 보강 ──────────────────────────────────
+step "런타임 의존성 설치"
+npm_config_cache="$NPM_CACHE_DIR" npm install --no-save --silent "${REQUIRED_PACKAGES[@]}"
+ok "Claude / Codex / Gemini / Wrapper 의존성 설치 완료"
 
 # ── 4. 실행 권한 ──────────────────────────────────────────
 step "실행 권한 설정"
@@ -89,7 +106,6 @@ if [ -w "/usr/local/bin" ]; then
   echo "$WRAPPER_CONTENT" > "$INSTALL_BIN"
   chmod +x "$INSTALL_BIN"
 else
-  echo -e "  ${Y}sudo 권한 필요${RST}"
   echo "$WRAPPER_CONTENT" | sudo tee "$INSTALL_BIN" > /dev/null
   sudo chmod +x "$INSTALL_BIN"
 fi
@@ -113,11 +129,7 @@ echo -e "${G}${B}  VOID//ai-launcher 설치 완료${RST}"
 echo -e "${G}${B}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
 echo ""
 echo -e "  ${G}void${RST}                    메인 메뉴"
-echo -e "  ${G}void claude${RST}             CLAUDE CODE 바로 실행"
-echo -e "  ${G}void claude --anon${RST}      익명 모드"
-echo -e "  ${G}void prompt${RST}             API 직접 호출"
-echo -e "  ${G}void tokens${RST}             토큰 관리"
-echo -e "  ${G}void sessions${RST}           세션 관리 (tmux)"
+echo -e "  ${G}void --help${RST}             도움말 보기"
 echo ""
 echo -e "  ${M}sudo void 도 동일하게 동작합니다.${RST}"
 echo ""
