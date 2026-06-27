@@ -186,17 +186,17 @@ async function showMainMenu() {
         const mode = last.sessionName || (last.isAnon ? 'anon' : false);
         if (tool) await launchTool(tool, mode);
       }
-      return showMainMenu();
+      return showMainMenu(); // tool 종료 후에도 메뉴 복귀
     }
     case '1': {
       const tool = config.tools.find(t => t.name === sel.selectedOption);
       if (tool) await launchTool(tool, false);
-      break;
+      return showMainMenu();
     }
     case '2': {
       const tool = config.tools.find(t => t.name === sel.selectedOption);
       if (tool) await launchTool(tool, 'anon');
-      break;
+      return showMainMenu();
     }
     case '3': {
       // 세션 실행: CLAUDE_CONFIG_DIR=$HOME/.claude-{name} claude
