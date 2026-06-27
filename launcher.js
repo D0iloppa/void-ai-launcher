@@ -80,33 +80,6 @@ async function handleArgs(argv) {
 
 // ── 메뉴 트리 ─────────────────────────────────────────────
 
-async function showModeMenu(tool) {
-  const { hasTmux } = require('./lib/sessions');
-  const tmux = hasTmux();
-  const items = [
-    { key: '1', label: '일반 실행' },
-    { key: '2', label: '익명 모드',  desc: 'tmp HOME, 종료시 삭제' },
-    { key: '3', label: 'tmux 세션', desc: tmux ? '' : '(tmux 없음)', disabled: !tmux },
-  ];
-  const sel = await ui.menu(tool.name, items, { back: true });
-  if (!sel) return showToolsMenu();
-
-  if (sel.key === '3') {
-    const { createSession } = require('./lib/sessions');
-    await createSession(tool, c);
-  } else {
-    await launchTool(tool, sel.key === '2');
-  }
-}
-
-async function showToolsMenu() {
-  const { tools } = config;
-  const items = tools.map((t, i) => ({ key: String(i + 1), label: t.name, desc: t.command }));
-  const sel = await ui.menu('AI Tools', items, { back: true });
-  if (!sel) return showMainMenu();
-  await showModeMenu(tools[Number(sel.key) - 1]);
-}
-
 async function showHistoryMenu() {
   const history = getHistory().slice(0, 9);
   if (history.length === 0) {
@@ -120,52 +93,91 @@ async function showHistoryMenu() {
   }));
   const sel = await ui.menu('History', items, { back: true });
   if (!sel) return showMainMenu();
-  const h    = history[Number(sel.key) - 1];
-  const tool = findTool(h.toolName);
-  if (tool) await launchTool(tool, h.isAnon);
+  const tool = findTool(history[Number(sel.key) - 1].toolName);
+  if (tool) await launchTool(tool, history[Number(sel.key) - 1].isAnon);
+}
+
+// ── 토큰 alias 목록 빌드 ("service/alias" 형태) ──────────
+
+function buildTokenOptions() {
+  const { getAllTokens } = require('./lib/config');
+  const all = getAllTokens();
+  const opts = [];
+  for (const [svc, aliases] of Object.entries(all)) {
+    for (const alias of Object.keys(aliases)) {
+      opts.push(`${svc}/${alias}`);
+    }
+  }
+  return opts.length > 0 ? opts : ['(없음)'];
 }
 
 async function showMainMenu() {
-  const last     = getLast();
-  const lastDesc = last
+  const last      = getLast();
+  const lastDesc  = last
     ? `${last.toolName}${last.isAnon ? ' [익명]' : ''} · ${timeSince(last.timestamp)}`
     : null;
+  const toolNames   = config.tools.map(t => t.name);
+  const tokenOpts   = buildTokenOptions();
+  const hasTokens   = tokenOpts[0] !== '(없음)';
 
   const items = [
-    { key: 'q', label: 'Quick Launch', desc: lastDesc || '이력 없음', disabled: !last },
-    { key: '1', label: 'AI Tools' },
-    { key: '2', label: 'Prompt',   desc: 'Anthropic / OpenAI 직접 호출' },
-    { key: '3', label: 'Sessions', desc: 'tmux / node-pty' },
-    { key: '4', label: 'Tokens',   desc: 'API 토큰 관리' },
-    { key: '5', label: 'History',  desc: '실행 이력' },
-    { key: '6', label: 'Config',   desc: '$EDITOR 로 config.yml 편집' },
+    { key: 'q', label: '빠른 시작',  desc: lastDesc || '이력 없음', disabled: !last },
+    { key: '1', label: '일반 실행',  options: toolNames },
+    { key: '2', label: '익명 모드',  options: toolNames },
+    { key: '3', label: '토큰 실행',  options: tokenOpts, disabled: !hasTokens },
+    { key: '4', label: 'Prompt',    desc: 'Anthropic / OpenAI' },
+    { key: '5', label: 'Sessions',  desc: 'tmux / node-pty' },
+    { key: '6', label: 'Tokens',    desc: 'API 토큰 관리' },
+    { key: '7', label: 'History',   desc: '실행 이력' },
+    { key: '8', label: 'Config',    desc: '$EDITOR 로 편집' },
   ];
 
   const sel = await ui.menu('VOID//ai-launcher', items, { subtitle: lastDesc });
   if (!sel) return;
 
   switch (sel.key) {
-    case 'q':
+    case 'q': {
       if (last) { const tool = findTool(last.toolName); if (tool) await launchTool(tool, last.isAnon); }
+      return showMainMenu();
+    }
+    case '1': {
+      const tool = config.tools.find(t => t.name === sel.selectedOption);
+      if (tool) await launchTool(tool, false);
       break;
-    case '1': return showToolsMenu();
+    }
     case '2': {
+      const tool = config.tools.find(t => t.name === sel.selectedOption);
+      if (tool) await launchTool(tool, true);
+      break;
+    }
+    case '3': {
+      // "service/alias" → Prompt 모드에 해당 토큰 주입
+      const [service, alias] = (sel.selectedOption || '').split('/');
+      const { getToken } = require('./lib/config');
+      const apiKey = getToken(service, alias);
+      if (apiKey) {
+        const { promptMode } = require('./lib/prompt');
+        await promptMode('', config, c, { service, alias, apiKey });
+      }
+      return showMainMenu();
+    }
+    case '4': {
       const { promptMode } = require('./lib/prompt');
       await promptMode('', config, c);
       return showMainMenu();
     }
-    case '3': {
+    case '5': {
       const { sessionsMenu } = require('./lib/sessions');
       await sessionsMenu(config, c);
       return showMainMenu();
     }
-    case '4': {
+    case '6': {
       const { tokensMenu } = require('./lib/tokens');
       await tokensMenu(c);
       return showMainMenu();
     }
-    case '5': return showHistoryMenu();
-    case '6': {
+    case '7': return showHistoryMenu();
+    case '8': {
       const { spawnSync } = require('child_process');
       ui.clear();
       spawnSync(process.env.EDITOR || 'vi', [configPath], { stdio: 'inherit' });
