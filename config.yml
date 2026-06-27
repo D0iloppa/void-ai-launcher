@@ -22,3 +22,9 @@ theme:
 
 settings:
   anonymous_home_prefix: ai-anon-
+
+  # ── Wrapper UI 패딩 ──────────────────────────────────────
+  # 좌우: border │ 와 콘텐츠 사이 공백 (단위: 열)
+  # 상하: 상단/하단 bar 와 콘텐츠 사이 padding row 수
+  wrapper_hpad: 2   # left + right padding (cols each side)
+  wrapper_vpad: 1   # top + bottom padding (rows each side)

@@ -60,7 +60,7 @@ async function launchTool(tool, mode) {
   const sessionName = (mode && typeof mode === 'string' && mode !== 'anon') ? mode : null;
   saveLast({ toolName: tool.name, isAnon, sessionName });
   appendHistory({ toolName: tool.name, isAnon, sessionName });
-  await runTool(tool, mode, c);
+  await runTool(tool, mode, c, config);
 }
 
 // ── args 직행 ─────────────────────────────────────────────
