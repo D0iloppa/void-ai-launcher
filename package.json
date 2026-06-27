@@ -1,15 +1,20 @@
 {
-  "name": "ai-launcher",
-  "version": "1.0.0",
-  "description": "AI CLI launcher — CLAUDE CODE / CODEX / agy with anonymous mode",
+  "name": "void-ai-launcher",
+  "version": "2.0.0",
+  "description": "VOID//ai-launcher — comprehensive AI CLI router",
   "main": "launcher.js",
   "bin": {
-    "ai": "./launcher.js"
+    "void": "./launcher.js"
   },
   "scripts": {
     "start": "node launcher.js"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"
+  },
+  "optionalDependencies": {
+    "@anthropic-ai/sdk": "*",
+    "openai": "*",
+    "node-pty": "*"
   }
 }

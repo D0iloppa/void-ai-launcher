@@ -2,18 +2,23 @@ tools:
   - name: CLAUDE CODE
     command: claude
     args: []
-    # anonymous_args: [--no-config]  # 필요시 익명 전용 플래그 추가
+    # anonymous_args: []  # 익명모드 전용 플래그
 
   - name: CODEX
     command: codex
     args: []
 
   - name: agy
-    command: agy   # 실제 agy 실행 명령어로 수정
+    command: agy
     args: []
 
+# ── Theme ──────────────────────────────────────────────────
+# built-in: green-black | red-void | amber-dark | cyan-deep
+theme:
+  name: green-black
+  # colors:          # 개별 색상 오버라이드 (주석 해제 후 수정)
+  #   signal: "#00ff41"
+  #   bg: "#0a0a0a"
+
 settings:
-  # 익명모드: 임시 HOME 디렉토리 생성 후 실행, 세션 종료 시 자동 삭제
   anonymous_home_prefix: ai-anon-
-  # fzf 없을 때 fallback: numbered (1/2/3 입력)
-  fzf_height: 12
