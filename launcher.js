@@ -132,7 +132,7 @@ async function showMainMenu() {
     { key: '8', label: 'Config',    desc: '$EDITOR 로 편집' },
   ];
 
-  const sel = await ui.menu('VOID//ai-launcher', items, { subtitle: lastDesc });
+  const sel = await ui.menu('VOID//ai-launcher', items, { subtitle: lastDesc, showHeader: true });
   if (!sel) return;
 
   switch (sel.key) {

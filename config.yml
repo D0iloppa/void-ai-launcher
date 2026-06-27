@@ -8,7 +8,7 @@ tools:
     command: codex
     args: []
 
-  - name: agy
+  - name: AGY
     command: agy
     args: []
 

@@ -13,8 +13,9 @@
     "js-yaml": "^4.1.0"
   },
   "optionalDependencies": {
-    "@anthropic-ai/sdk": "*",
-    "openai": "*",
-    "node-pty": "*"
+    "@anthropic-ai/sdk": "^0.106.0",
+    "@google/generative-ai": "*",
+    "node-pty": "*",
+    "openai": "^6.45.0"
   }
 }
