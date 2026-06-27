@@ -22,6 +22,21 @@ ui.setColors(c);
 
 const argv = process.argv.slice(2);
 
+// ── --sudo 재실행 ─────────────────────────────────────────
+// void --sudo 를 실행하면 sudo 권한으로 void 를 재시작한다.
+// void 바이너리는 /usr/local/bin/void (cmd_generator.sh 기준)
+if (argv.includes('--sudo')) {
+  if (process.getuid && process.getuid() !== 0) {
+    const { spawnSync: _sx } = require('child_process');
+    const voidBin = process.env._VOID_BIN || '/usr/local/bin/void';
+    const rest    = argv.filter(a => a !== '--sudo');
+    const res     = _sx('sudo', [voidBin, ...rest], { stdio: 'inherit' });
+    process.exit(res.status ?? 0);
+  }
+  // 이미 root이면 --sudo 플래그만 제거하고 계속 진행
+  argv.splice(argv.indexOf('--sudo'), 1);
+}
+
 // ── 유틸 ─────────────────────────────────────────────────
 
 function timeSince(ts) {

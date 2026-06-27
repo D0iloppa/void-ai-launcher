@@ -82,6 +82,7 @@ step "void 명령어 설치  →  ${INSTALL_BIN}"
 # symlink 대신 wrapper script 사용:
 # nvm node는 sudo PATH에 없을 수 있으므로 절대 경로를 wrapper에 기록
 WRAPPER_CONTENT="#!/usr/bin/env bash
+export _VOID_BIN=\"${INSTALL_BIN}\"
 exec \"${NODE_BIN}\" \"${SCRIPT_DIR}/launcher.js\" \"\$@\""
 
 if [ -w "/usr/local/bin" ]; then
