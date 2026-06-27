@@ -1,2 +1,7 @@
 node_modules/
+
+# 사용자 설정 (토큰, 세션 등 민감 정보)
 config.json
+
+# void-launcher 런타임 데이터 (XDG 경로에 저장되지만 혹시 로컬에 생길 경우 대비)
+.void-launcher/
