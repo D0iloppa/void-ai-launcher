@@ -22,6 +22,7 @@ theme:
 
 settings:
   anonymous_home_prefix: ai-anon-
+  double_width_emoji: true # 이모지 터미널 표시 너비 (1칸 렌더링 시 false로 설정)
 
   # ── Wrapper UI 패딩 ──────────────────────────────────────
   # 좌우: border │ 와 콘텐츠 사이 공백 (단위: 열)

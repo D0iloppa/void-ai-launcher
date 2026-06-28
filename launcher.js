@@ -9,7 +9,10 @@ const configPath = path.join(__dirname, 'config.yml');
 const config = yaml.load(fs.readFileSync(configPath, 'utf8'));
 
 const { loadTheme, makeColors } = require('./lib/theme');
-const { getLast, saveLast, appendHistory, getHistory } = require('./lib/storage');
+const {
+  getLast, saveLast, appendHistory, getHistory,
+  resolveSessionConfigDir, resolveToolStateDir,
+} = require('./lib/storage');
 const { runTool, runCommandLine, runHostShell } = require('./lib/runner');
 const ui = require('./lib/ui');
 
@@ -18,14 +21,15 @@ require('./lib/config');
 
 const palette = loadTheme(config);
 const c = makeColors(palette);
-ui.setColors(c);
+ui.setColors(c, palette);
 ui.setFrameConfig({
   hpad: typeof config.settings?.wrapper_hpad === 'number' ? config.settings.wrapper_hpad : 2,
   vpad: typeof config.settings?.wrapper_vpad === 'number' ? config.settings.wrapper_vpad : 1,
+  double_width_emoji: typeof config.settings?.double_width_emoji === 'boolean' ? config.settings.double_width_emoji : true,
 });
 
 const argv = process.argv.slice(2);
-const SESSION_CAPABLE_COMMANDS = new Set(['claude', 'codex']);
+const SESSION_CAPABLE_COMMANDS = new Set(['claude', 'codex', 'agy']);
 
 // ── --sudo 재실행 ─────────────────────────────────────────
 // void --sudo 를 실행하면 sudo 권한으로 void 를 재시작한다.
@@ -71,10 +75,10 @@ function describeLaunch(entry) {
   return parts.join(' ');
 }
 
-function printHelp() {
+function getHelpText() {
   const toolList = config.tools.map(t => `  void ${t.command} [args...]`).join('\n');
-  const text = [
-    'VOID//ai-launcher',
+  return [
+    'VOID//ai-launcher 도움말',
     '',
     'Usage:',
     '  void',
@@ -94,16 +98,25 @@ function printHelp() {
     '  void claude --anon',
     '  void host',
     '',
-    'Menu keys:',
-    '  q 빠른 시작',
-    '  1 일반 실행',
-    '  2 고급 모드',
-    '  3 Config',
-    '  h Host Shell',
-    '  : svc command mode',
+    '1. 주요 메뉴 설명',
+    '   - History: 최근에 실행했던 도구와 인수들을 간편하게 재실행합니다.',
+    '   - VOID 설정: 현재 설정된 config.yml 파일을 기본 에디터($EDITOR)로 엽니다.',
+    '   - LLM CLI 세션관리: AI 클라이언트(Claude, Codex, agy)의 개별 세션을 관리합니다.',
+    '   - 토큰 및 인증 관리: API 토큰이나 외부 서비스 자격 증명을 관리합니다.',
+    '',
+    '2. 터미널 조작 방법',
+    '   - ↑ / ↓ : 메뉴 항목 이동',
+    '   - ← / → : 가로 캐러셀 옵션 변경 (일반 실행의 대상 모델 등)',
+    '   - Enter / 단축키 : 선택한 항목 즉시 실행',
+    '   - ESC / 0 : 이전 메뉴로 돌아가기 또는 종료',
+    '   - : (콜론) : svc 스타일의 셸 명령어 모드로 즉시 진입',
+    '   - Ctrl + C : 언제든지 런처 강제 종료',
+    '   - Ctrl + D (또는 exit 입력) : tmux 세션이나 호스트 셸 실행 중 런처 메뉴(svc)로 안전하게 복귀',
   ].join('\n');
+}
 
-  process.stdout.write(text + '\n');
+function printHelp() {
+  process.stdout.write(getHelpText() + '\n');
 }
 
 // mode: false = 일반 | 'anon' = 익명 | string = 세션명
@@ -185,7 +198,7 @@ async function showHistoryMenu(returnToMain = true) {
       session: {
         name: h.sessionName,
         toolCommand: h.sessionToolCommand || tool?.command || 'claude',
-        configDir: path.join(require('os').homedir(), `.${h.sessionToolCommand || tool?.command || 'claude'}-${h.sessionName}`),
+        configDir: resolveSessionConfigDir(h.sessionToolCommand || tool?.command || 'claude', h.sessionName),
       },
     }
     : (h.isAnon ? 'anon' : false);
@@ -214,7 +227,7 @@ function buildSessionOptions() {
 
 const HOME_LINKS = [
   { label: '🏠 Doil G.W', url: 'https://doil.me' },
-  { label: '🖥️ ADMIN console', url: 'https://doil.me/admin' },
+  { label: '💻 ADMIN console', url: 'https://doil.me/admin' },
   { label: '📗 Wiki', url: 'https://www.doil.me/wiki/' },
   { label: '🎫 Plane', url: 'https://plane.doil.me/' },
   { label: '📚 Doyclopedia', url: 'https://doiloppa.notion.site/' },
@@ -222,28 +235,31 @@ const HOME_LINKS = [
 
 // ── Config 서브메뉴 ───────────────────────────────────────
 
-async function showConfigMenu() {
+async function showSettingsMenu(topRows) {
   const { cliSessionsMenu } = require('./lib/sessions');
   const { extTokensMenu } = require('./lib/extTokens');
   const { spawnSync } = require('child_process');
 
   while (true) {
     const items = [
-      { key: '1', label: 'YAML 편집', desc: '$EDITOR config.yml' },
-      { key: '2', label: 'CLI 세션', desc: 'Claude / Codex 세션 생성 / 삭제' },
-      { key: '3', label: '외부 토큰', desc: 'API Key export 명령어' },
+      { key: '1', label: 'History', desc: '실행 이력 조회 및 재실행' },
+      { key: '2', label: 'VOID 설정', desc: 'config.yml 파일 직접 편집 ($EDITOR)' },
+      { key: '3', label: 'LLM CLI 세션관리', desc: 'Claude / Codex / AGY 세션 생성 및 삭제' },
+      { key: '4', label: '토큰 및 인증 관리', desc: 'API 토큰 등록, CLI 로그인 인증 및 Export' },
     ];
 
-    const sel = await ui.menu('Config', items, { back: true });
+    const sel = await ui.menu('설정 및 이력', items, { back: true, topRows });
     if (!sel) return;
 
     if (sel.key === '1') {
+      await showHistoryMenu(false);
+    } else if (sel.key === '2') {
       ui.clear();
       spawnSync(process.env.EDITOR || 'vi', [configPath], { stdio: 'inherit' });
-    } else if (sel.key === '2') {
-      await cliSessionsMenu(config, c);
     } else if (sel.key === '3') {
-      await extTokensMenu(c);
+      await cliSessionsMenu(config, c);
+    } else if (sel.key === '4') {
+      await extTokensMenu(config, c);
     }
   }
 }
@@ -286,19 +302,15 @@ async function showSessionLaunchMenu() {
   await launchTool(tool, { type: 'session', session });
 }
 
-async function showAdvancedMenu(toolNames, tokenOpts, sessionOpts, hasTokens, hasSessions) {
+async function showAdvancedMenu(toolNames, tokenOpts, sessionOpts, hasTokens, hasSessions, topRows) {
   const items = [
     { key: '1', label: '익명 모드', options: toolNames },
     { key: '2', label: '세션 실행', desc: '도구 선택 후 세션 선택', disabled: !hasSessions },
-    { key: '3', label: '토큰 실행', options: tokenOpts, disabled: !hasTokens },
-    { key: '4', label: 'Prompt', desc: 'Anthropic / OpenAI / Google' },
-    { key: '5', label: '터미널 세션', desc: 'tmux / node-pty' },
-    { key: '6', label: 'Tokens', desc: 'API 토큰 관리' },
-    { key: '7', label: 'Chat', desc: '대화형 AI 프롬프트 (claude / codex / ...)' },
+    { key: '3', label: '터미널 세션', desc: 'tmux / node-pty' },
   ];
 
   while (true) {
-    const sel = await ui.menu('고급 모드', items, { back: true });
+    const sel = await ui.menu('고급 모드', items, { back: true, topRows });
     if (!sel) return;
 
     switch (sel.key) {
@@ -312,121 +324,15 @@ async function showAdvancedMenu(toolNames, tokenOpts, sessionOpts, hasTokens, ha
         break;
       }
       case '3': {
-        const [service, alias] = (sel.selectedOption || '').split('/');
-        const { getToken } = require('./lib/config');
-        const { promptMode } = require('./lib/prompt');
-        const apiKey = getToken(service, alias);
-        if (apiKey) await promptMode('', config, c, { service, alias, apiKey });
-        break;
-      }
-      case '4': {
-        const { promptMode } = require('./lib/prompt');
-        await promptMode('', config, c);
-        break;
-      }
-      case '5': {
         const { terminalSessionsMenu } = require('./lib/sessions');
         await terminalSessionsMenu(config, c);
         break;
       }
-      case '6': {
-        const { tokensMenu } = require('./lib/tokens');
-        await tokensMenu(c);
-        break;
-      }
-      case '7': {
-        await showChatMenu();
-        break;
-      }
     }
   }
 }
 
-async function showSettingsMenu() {
-  while (true) {
-    const items = [
-      { key: '1', label: 'History', desc: '실행 이력' },
-      { key: '2', label: 'Config', desc: '설정 편집 / 세션 / 토큰' },
-    ];
 
-    const sel = await ui.menu('Config', items, { back: true });
-    if (!sel) return;
-
-    if (sel.key === '1') {
-      await showHistoryMenu(false);
-    } else if (sel.key === '2') {
-      await showConfigMenu();
-    }
-  }
-}
-
-async function showChatMenu() {
-  const os = require('os');
-  const { getSessions } = require('./lib/storage');
-
-  // step 1: binary
-  const toolItems = config.tools.map((t, i) => ({
-    key: String(i + 1), label: t.name, desc: t.command,
-  }));
-  const toolSel = await ui.menu('Chat — 도구 선택', toolItems, { back: true });
-  if (!toolSel) return;
-  const tool = config.tools[Number(toolSel.key) - 1];
-  const binary = tool.command;
-
-  // step 2: session / config dir
-  const namedSessions = getSessions().filter(s => (s.toolCommand || 'claude') === binary);
-  const anonDir = path.join(os.homedir(), `.${binary}-anon`);
-  const sessionItems = [
-    { key: '0', label: '기본', desc: '기본 설정 경로 (~/.claude 등)' },
-    { key: 'a', label: '익명 (anon)', desc: anonDir },
-    ...namedSessions.map((s, i) => ({ key: String(i + 1), label: s.name, desc: s.configDir })),
-  ];
-  const sessionSel = await ui.menu(`Chat — ${tool.name} 세션`, sessionItems, { back: true });
-  if (!sessionSel) return;
-
-  let configDir = '';
-  let sessionName = 'default';
-  if (sessionSel.key === 'a') {
-    configDir = anonDir; sessionName = 'anon';
-  } else if (sessionSel.key !== '0') {
-    const s = namedSessions[Number(sessionSel.key) - 1];
-    if (s) { configDir = s.configDir; sessionName = s.name; }
-  }
-
-  // step 3: model
-  const MODEL_PRESETS = {
-    claude: ['', 'claude-opus-4-8', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-    codex: ['', 'codex-mini-latest', 'o4-mini'],
-  };
-  const presets = MODEL_PRESETS[binary] || [''];
-  const modelItems = [
-    ...presets.map((m, i) => ({ key: String(i + 1), label: m || '기본 모델', desc: m ? '' : '바이너리 기본값' })),
-    { key: 'm', label: '직접 입력' },
-  ];
-  const modelSel = await ui.menu(`Chat — ${tool.name} 모델`, modelItems, { back: true });
-  if (!modelSel) return;
-
-  let model = '';
-  if (modelSel.key === 'm') {
-    model = (await ui.input('모델명: ')).trim();
-  } else {
-    model = presets[Number(modelSel.key) - 1] || '';
-  }
-
-  // launch
-  const q = s => `'${s.replace(/'/g, "'\\''")}'`;
-  const chatPath = path.join(__dirname, 'lib', 'chat-runner.js');
-  const runArgs = [
-    `--binary ${q(binary)}`,
-    model ? `--model ${q(model)}` : '',
-    configDir ? `--config-dir ${q(configDir)}` : '',
-    `--session-name ${q(sessionName)}`,
-  ].filter(Boolean).join(' ');
-
-  const shortModel = model ? ' · ' + model.split('-').slice(-2).join('-') : '';
-  const label = `chat · ${binary}${shortModel} [${sessionName}]`;
-  await runCommandLine(`node ${q(chatPath)} ${runArgs}`, c, config, label);
-}
 
 async function showCommandMode() {
   ui.clear();
@@ -456,10 +362,9 @@ async function showMainMenu() {
   const items = [
     { key: 'q', label: '빠른 시작', desc: lastDesc || '이력 없음', disabled: !last },
     { key: '1', label: '일반 실행', options: toolNames },
-    { key: '2', label: '고급 모드', desc: '세션 / 토큰 / Prompt / 터미널 / Tokens' },
-    { key: '3', label: 'Config', desc: 'History 및 설정 관련' },
-    { key: 'h', label: 'Host Shell', desc: '호스트 로그인 셸 탭 열기' },
-    { key: ':', label: 'Command', desc: 'svc 스타일 셸 명령 실행' },
+    { key: '2', label: '고급 모드', desc: '익명 실행 / 세션 실행 / 터미널 세션' },
+    { key: '3', label: '설정 및 이력', desc: 'History 조회, VOID 설정 편집, CLI 세션/인증 관리' },
+    { key: 'h', label: '도움말', desc: 'VOID 단축키 및 각 메뉴별 상세 도움말 확인' },
   ];
 
   const sel = await ui.homeMenu({
@@ -480,7 +385,7 @@ async function showMainMenu() {
             session: {
               name: last.sessionName,
               toolCommand: last.sessionToolCommand || tool?.command || 'claude',
-              configDir: path.join(require('os').homedir(), `.${last.sessionToolCommand || tool?.command || 'claude'}-${last.sessionName}`),
+              configDir: resolveSessionConfigDir(last.sessionToolCommand || tool?.command || 'claude', last.sessionName),
             },
           }
           : (last.isAnon ? 'anon' : false);
@@ -494,19 +399,17 @@ async function showMainMenu() {
       return showMainMenu();
     }
     case '2': {
-      await showAdvancedMenu(toolNames, tokenOpts, sessionOpts, hasTokens, hasSessions);
+      await showAdvancedMenu(toolNames, tokenOpts, sessionOpts, hasTokens, hasSessions, sel.panelRows);
       return showMainMenu();
     }
     case '3': {
-      await showSettingsMenu();
+      await showSettingsMenu(sel.panelRows);
       return showMainMenu();
     }
-    case 'h':
-      await runHostShell(c, config);
+    case 'h': {
+      await ui.scrollableMessage('도움말', getHelpText());
       return showMainMenu();
-    case ':':
-      await showCommandMode();
-      return showMainMenu();
+    }
   }
 }
 
