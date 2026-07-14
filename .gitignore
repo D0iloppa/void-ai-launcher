@@ -5,3 +5,14 @@ config.json
 
 # void-launcher 런타임 데이터 (XDG 경로에 저장되지만 혹시 로컬에 생길 경우 대비)
 .void-launcher/
+
+# 빌드 산출물 / 로컬 스크래치
+dist/
+_tmp/
+
+# 로컬 빌드/테스트용으로 내려받은 tmux 소스 (커밋 대상 아님)
+tmux-3.4.tar.gz
+tmux-3.4/
+
+# 세션 작업 메모 (repo 문서 아님)
+TASK_CONTEXT.md

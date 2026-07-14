@@ -7,8 +7,9 @@ const fs   = require('fs');
 const path = require('path');
 const os   = require('os');
 
-const isWin = process.platform === 'win32';
-const DIR   = __dirname;
+const isWin    = process.platform === 'win32';
+const isDarwin = process.platform === 'darwin';
+const DIR      = __dirname;
 const NODE_MIN   = 18;
 const NODE_BIN   = process.execPath;
 const NONI       = process.env.VOID_BUILD_NONINTERACTIVE === '1';
@@ -58,7 +59,20 @@ step('런타임 의존성 설치');
 spawnSync('npm', ['install', '--no-save', '--silent', ...RUNTIME_PKGS], npmOpts);
 ok('Claude / Codex / Gemini / Wrapper 의존성 설치 완료');
 
-// ── 4. Register command ────────────────────────────────────────────────────
+// ── 4. tmux check (macOS only — Big Sur+ ships without it) ─────────────────
+if (isDarwin) {
+  step('tmux 확인 (macOS)');
+  const hasTmux = spawnSync('which', ['tmux'], { encoding: 'utf8' }).status === 0;
+  if (hasTmux) {
+    ok('tmux 설치 확인됨 — 풀스크린 wrapper 사용 가능');
+  } else {
+    warn('tmux가 설치되어 있지 않습니다 (macOS는 Big Sur 이후 tmux 기본 미포함)');
+    console.log(`  ${M}풀스크린 wrapper(멀티탭/border)를 쓰려면: ${RST}${B}brew install tmux${RST}`);
+    console.log(`  ${M}tmux 없이도 crash 없이 단순 실행 경로로 자동 폴백됩니다.${RST}`);
+  }
+}
+
+// ── 5. Register command ────────────────────────────────────────────────────
 if (isWin) installWindows();
 else installUnix();
 

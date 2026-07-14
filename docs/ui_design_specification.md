@@ -1,4 +1,4 @@
-# VOID Terminal UI Design Specification
+ㅠ# VOID Terminal UI Design Specification
 
 This document defines the layout structure, terminology, and naming conventions for the **VOID AI Launcher Terminal UI** (updated to **Option A: Borderless Status Bar Layout**).
 
