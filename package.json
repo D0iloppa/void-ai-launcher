@@ -28,6 +28,7 @@
     "@anthropic-ai/sdk": "^0.106.0",
     "@google/generative-ai": "*",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@xterm/headless": "^6.0.0",
     "node-pty": "*",
     "openai": "^6.45.0",
     "zod": "^3.25.0 || ^4.0.0"
