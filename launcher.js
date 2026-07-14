@@ -431,6 +431,14 @@ async function main() {
 }
 
 main().catch(err => {
-  process.stderr.write(c.warn + err.message + c.RESET + '\n');
+  try {
+    const { storageDir } = require('./lib/storage');
+    const logPath = path.join(storageDir(), 'error.log');
+    fs.appendFileSync(logPath, `[${new Date().toISOString()}] fatal: ${err.stack || err}\n`, { mode: 0o600 });
+    process.stderr.write(c.warn + err.message + c.RESET + '\n');
+    process.stderr.write(c.muted2 + '  에러 로그: ' + logPath + c.RESET + '\n');
+  } catch {
+    process.stderr.write(c.warn + err.message + c.RESET + '\n');
+  }
   process.exit(1);
 });

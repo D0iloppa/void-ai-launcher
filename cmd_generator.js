@@ -14,7 +14,11 @@ const NODE_MIN   = 18;
 const NODE_BIN   = process.execPath;
 const NONI       = process.env.VOID_BUILD_NONINTERACTIVE === '1';
 const NPM_CACHE  = process.env.VOID_NPM_CACHE_DIR || path.join(os.tmpdir(), 'void-npm-cache');
-const RUNTIME_PKGS = ['@anthropic-ai/sdk', '@google/generative-ai', 'node-pty', 'openai'];
+// node-pty requires MSVC native build on Windows (node-gyp) — skip explicit install;
+// it's in optionalDependencies so npm already attempted it and failures are non-fatal.
+const RUNTIME_PKGS = isWin
+  ? ['@anthropic-ai/sdk', '@google/generative-ai', 'openai']
+  : ['@anthropic-ai/sdk', '@google/generative-ai', 'node-pty', 'openai'];
 
 // ── ANSI ───────────────────────────────────────────────────────────────────
 const G = '\x1b[38;2;0;230;118m', Y = '\x1b[38;2;251;191;36m',
@@ -71,19 +75,114 @@ if (!isWin && !canWriteDir('/usr/local/bin')) {
 }
 
 // ── 3. npm install ─────────────────────────────────────────────────────────
-const npmOpts = { cwd: DIR, env: { ...process.env, npm_config_cache: NPM_CACHE }, stdio: 'inherit', shell: isWin };
+// On Windows, .cmd scripts must go through cmd.exe — spawnSync can't exec them directly.
+// Wrap as ['cmd', '/c', 'npm', ...args] so we avoid shell:true while still invoking .cmd files.
+const spawnNpm = (args, opts) =>
+  isWin
+    ? spawnSync('cmd', ['/c', 'npm', ...args], opts)
+    : spawnSync('npm', args, opts);
+const npmOpts = { cwd: DIR, env: { ...process.env, npm_config_cache: NPM_CACHE }, stdio: 'inherit' };
 
 step('의존성 설치');
-spawnSync('npm', ['install', '--silent'], npmOpts);
+spawnNpm(['install'], npmOpts);
 ok('js-yaml 설치 완료');
 
 step('런타임 의존성 설치');
-spawnSync('npm', ['install', '--no-save', '--silent', ...RUNTIME_PKGS], npmOpts);
+spawnNpm(['install', '--no-save', ...RUNTIME_PKGS], npmOpts);
 ok('Claude / Codex / Gemini / Wrapper 의존성 설치 완료');
 
-// ── 4. tmux check (macOS only — Big Sur+ ships without it) ─────────────────
-// tmux는 void의 풀스크린/서브쉘 wrapper에 필수이므로, 확보하지 못하면 설치를
-// 여기서 중단한다 (die). 재실행 시 이미 tmux가 있으면 이 블록은 바로 통과된다.
+// ── 4. tmux check ──────────────────────────────────────────────────────────
+// Windows: tmux-windows (arndawg/tmux-windows) via winget
+// macOS  : brew install tmux (Big Sur+ ships without it)
+if (isWin) {
+  step('tmux 확인 (Windows)');
+  const hasTmux = spawnSync('cmd', ['/c', 'where', 'tmux'], { encoding: 'utf8' }).status === 0;
+  if (hasTmux) {
+    const ver = (spawnSync('cmd', ['/c', 'tmux', '-V'], { encoding: 'utf8' }).stdout || '').trim();
+    ok(`tmux 설치 확인됨 (${ver}) — 풀스크린 wrapper 사용 가능`);
+  } else {
+    warn('tmux가 설치되어 있지 않습니다.');
+    let tmuxInstalled = false;
+
+    // 1차: winget
+    const hasWinget = spawnSync('cmd', ['/c', 'winget', '--version'], { encoding: 'utf8' }).status === 0;
+    if (hasWinget) {
+      console.log(`  ${M}winget install arndawg.tmux-windows 실행 중...${RST}`);
+      const r = spawnSync('cmd', ['/c', 'winget', 'install', '--id', 'arndawg.tmux-windows',
+        '-e', '--accept-source-agreements', '--accept-package-agreements'], { stdio: 'inherit' });
+      if (r.status === 0) {
+        ok('tmux-windows 설치 완료 (winget) — 새 터미널을 열어 PATH를 갱신한 뒤 void를 실행하세요.');
+        tmuxInstalled = true;
+      } else {
+        warn('winget 설치에 실패했습니다. 서브모듈 릴리즈 바이너리로 대체합니다...');
+      }
+    }
+
+    // 2차: tmux-windows 서브모듈의 pinned 태그 → GitHub Releases에서 tmux.exe 다운로드
+    if (!tmuxInstalled) {
+      const SUBMODULE_DIR = path.join(DIR, 'tmux-windows');
+      const hasSubmodule = fs.existsSync(path.join(SUBMODULE_DIR, 'CMakeLists.txt'));
+      if (!hasSubmodule) {
+        warn('tmux-windows 서브모듈이 초기화되지 않았습니다. git submodule update --init 을 실행하세요.');
+      } else {
+        const tagResult = spawnSync('git', ['describe', '--tags', '--abbrev=0'],
+          { cwd: SUBMODULE_DIR, encoding: 'utf8' });
+        const tag = tagResult.stdout.trim();
+        if (!tag) {
+          warn('서브모듈 태그를 확인할 수 없습니다.');
+        } else {
+          const zipName = `tmux-windows-${tag}.zip`;
+          const downloadUrl = `https://github.com/arndawg/tmux-windows/releases/download/${tag}/${zipName}`;
+          const tmpZip = path.join(os.tmpdir(), zipName);
+          const tmpExtract = path.join(os.tmpdir(), 'void-tmux-extract');
+
+          console.log(`  ${M}서브모듈 버전 ${tag} 릴리즈 다운로드 중...${RST}`);
+          const dlResult = spawnSync('powershell', [
+            '-NoProfile', '-NonInteractive', '-Command',
+            `Invoke-WebRequest -Uri '${downloadUrl}' -OutFile '${tmpZip}'`
+          ], { stdio: 'inherit' });
+
+          if (dlResult.status !== 0) {
+            warn('릴리즈 다운로드에 실패했습니다.');
+          } else {
+            spawnSync('powershell', [
+              '-NoProfile', '-NonInteractive', '-Command',
+              `Expand-Archive -Path '${tmpZip}' -DestinationPath '${tmpExtract}' -Force`
+            ], { stdio: 'inherit' });
+
+            const findResult = spawnSync('powershell', [
+              '-NoProfile', '-NonInteractive', '-Command',
+              `(Get-ChildItem -Path '${tmpExtract}' -Filter 'tmux.exe' -Recurse | Select-Object -First 1).FullName`
+            ], { encoding: 'utf8' });
+
+            const tmuxExePath = (findResult.stdout || '').trim();
+            if (tmuxExePath && fs.existsSync(tmuxExePath)) {
+              const npmPrefix = (spawnNpm(['prefix', '-g'], { encoding: 'utf8' }).stdout || '').trim();
+              const destPath = path.join(npmPrefix, 'tmux.exe');
+              try {
+                fs.copyFileSync(tmuxExePath, destPath);
+                ok(`tmux.exe 설치됨 (${tag}) → ${destPath}`);
+                tmuxInstalled = true;
+              } catch (e) {
+                warn(`tmux.exe 복사 실패 (권한 부족?): ${e.message}`);
+              }
+            } else {
+              warn('zip에서 tmux.exe를 찾을 수 없습니다.');
+            }
+
+            try { fs.rmSync(tmpZip, { force: true }); } catch {}
+            try { fs.rmSync(tmpExtract, { recursive: true, force: true }); } catch {}
+          }
+        }
+      }
+    }
+
+    if (!tmuxInstalled) {
+      warn('자동 설치에 실패했습니다. 수동으로 설치하세요: https://github.com/arndawg/tmux-windows/releases');
+    }
+  }
+}
+
 if (isDarwin) {
   step('tmux 확인 (macOS)');
   const hasTmux = spawnSync('which', ['tmux'], { encoding: 'utf8' }).status === 0;
@@ -180,7 +279,7 @@ function installWindows() {
   step('void 명령어 설치 (Windows)');
 
   // npm global prefix → e.g. C:\Users\<user>\AppData\Roaming\npm
-  const npmPrefix = spawnSync('npm', ['prefix', '-g'], { encoding: 'utf8', shell: true }).stdout.trim();
+  const npmPrefix = (spawnNpm(['prefix', '-g'], { encoding: 'utf8' }).stdout || '').trim();
   const launcherAbs = path.win32.join(DIR, 'launcher.js');
 
   // .cmd for cmd.exe / bat, .ps1 for PowerShell
@@ -197,7 +296,7 @@ function installWindows() {
   }
 
   step('설치 확인');
-  const where = spawnSync('where', ['void'], { encoding: 'utf8', shell: true });
+  const where = spawnSync('where', ['void'], { encoding: 'utf8' });
   if (where.status === 0) ok(`where void → ${where.stdout.trim()}`);
   else {
     warn("'void' 를 PATH 에서 찾을 수 없습니다.");

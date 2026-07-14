@@ -1,0 +1,3 @@
+[submodule "tmux-windows"]
+	path = tmux-windows
+	url = https://github.com/arndawg/tmux-windows
