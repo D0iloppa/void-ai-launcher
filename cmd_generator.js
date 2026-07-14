@@ -67,8 +67,16 @@ if (isDarwin) {
     ok('tmux 설치 확인됨 — 풀스크린 wrapper 사용 가능');
   } else {
     warn('tmux가 설치되어 있지 않습니다 (macOS는 Big Sur 이후 tmux 기본 미포함)');
-    console.log(`  ${M}풀스크린 wrapper(멀티탭/border)를 쓰려면: ${RST}${B}brew install tmux${RST}`);
-    console.log(`  ${M}tmux 없이도 crash 없이 단순 실행 경로로 자동 폴백됩니다.${RST}`);
+    const hasBrew = spawnSync('which', ['brew'], { encoding: 'utf8' }).status === 0;
+    if (hasBrew) {
+      console.log(`  ${M}brew install tmux 실행 중...${RST}`);
+      const r = spawnSync('brew', ['install', 'tmux'], { stdio: 'inherit' });
+      if (r.status === 0) ok('tmux 설치 완료 — 풀스크린 wrapper 사용 가능');
+      else warn('brew install tmux 실패 — 수동으로 설치해주세요. tmux 없이도 crash 없이 단순 실행 경로로 자동 폴백됩니다.');
+    } else {
+      console.log(`  ${M}Homebrew가 없어 자동 설치를 건너뜁니다. 풀스크린 wrapper(멀티탭/border)를 쓰려면: ${RST}${B}brew install tmux${RST}`);
+      console.log(`  ${M}tmux 없이도 crash 없이 단순 실행 경로로 자동 폴백됩니다.${RST}`);
+    }
   }
 }
 
