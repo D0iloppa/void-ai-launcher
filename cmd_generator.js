@@ -183,6 +183,8 @@ if (isWin) {
   }
 }
 
+// macOS: tmux는 void의 풀스크린/서브쉘 wrapper에 필수이므로, 확보하지 못하면 설치를
+// 여기서 중단한다 (die). 재실행 시 이미 tmux가 있으면 이 블록은 바로 통과된다.
 if (isDarwin) {
   step('tmux 확인 (macOS)');
   const hasTmux = spawnSync('which', ['tmux'], { encoding: 'utf8' }).status === 0;
