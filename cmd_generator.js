@@ -28,6 +28,28 @@ const die  = msg => { console.error(`  ${R}✗${RST}  ${msg}`); process.exit(1);
 
 const canWriteDir = dir => { try { fs.accessSync(dir, fs.constants.W_OK); return true; } catch { return false; } };
 
+// 대화형 stdin (GUI 설치 창처럼 스크립트가 직접 제어할 수 없는 작업을 사용자가
+// 끝낸 뒤 Enter로 알려주는 용도). fd 0는 npm/셸 wrapper를 거치며 TTY 판정이나
+// non-blocking 상태가 꼬일 수 있어, 컨트롤링 터미널을 직접 여는 /dev/tty로 읽는다.
+// 컨트롤링 터미널이 없는 비대화형 빌드(NONI)/CI에서는 open 자체가 실패해 빈 값 반환.
+const promptSync = question => {
+  process.stdout.write(question);
+  if (NONI) return '';
+  let fd;
+  try { fd = fs.openSync('/dev/tty', 'r'); } catch { return ''; }
+  try {
+    const buf = Buffer.alloc(4096);
+    const n = fs.readSync(fd, buf, 0, buf.length, null);
+    return buf.toString('utf8', 0, n).trim();
+  } catch {
+    return '';
+  } finally {
+    fs.closeSync(fd);
+  }
+};
+const askYesNo  = question => /^y(es)?$/i.test(promptSync(`  ${Y}?${RST}  ${question} [y/N] `));
+const waitEnter = message  => promptSync(`  ${M}${message}${RST}`);
+
 // ── Header ─────────────────────────────────────────────────────────────────
 console.log(`\n${G}${B}┌── VOID//ai-launcher ─ 설치 스크립트 ──────────┐${RST}`);
 console.log(`${G}${B}│${RST}  cmd_generator.js                              ${G}${B}│${RST}`);
@@ -60,6 +82,8 @@ spawnSync('npm', ['install', '--no-save', '--silent', ...RUNTIME_PKGS], npmOpts)
 ok('Claude / Codex / Gemini / Wrapper 의존성 설치 완료');
 
 // ── 4. tmux check (macOS only — Big Sur+ ships without it) ─────────────────
+// tmux는 void의 풀스크린/서브쉘 wrapper에 필수이므로, 확보하지 못하면 설치를
+// 여기서 중단한다 (die). 재실행 시 이미 tmux가 있으면 이 블록은 바로 통과된다.
 if (isDarwin) {
   step('tmux 확인 (macOS)');
   const hasTmux = spawnSync('which', ['tmux'], { encoding: 'utf8' }).status === 0;
@@ -68,20 +92,42 @@ if (isDarwin) {
   } else {
     warn('tmux가 설치되어 있지 않습니다 (macOS는 Big Sur 이후 tmux 기본 미포함)');
     const hasBrew = spawnSync('which', ['brew'], { encoding: 'utf8' }).status === 0;
-    const hasCLT  = hasBrew && spawnSync('xcode-select', ['-p'], { encoding: 'utf8' }).status === 0;
-    if (hasBrew && !hasCLT) {
-      warn('Xcode Command Line Tools가 없어 brew install을 건너뜁니다.');
-      console.log(`  ${M}먼저 설치: ${RST}${B}xcode-select --install${RST}${M}  (완료 후 brew install tmux를 직접 실행하거나 npm run build를 다시 실행하세요)${RST}`);
-      console.log(`  ${M}tmux 없이도 crash 없이 단순 실행 경로로 자동 폴백됩니다.${RST}`);
-    } else if (hasBrew) {
-      console.log(`  ${M}brew install tmux 실행 중...${RST}`);
-      const r = spawnSync('brew', ['install', 'tmux'], { stdio: 'inherit' });
-      if (r.status === 0) ok('tmux 설치 완료 — 풀스크린 wrapper 사용 가능');
-      else warn('brew install tmux 실패 — 수동으로 설치해주세요. tmux 없이도 crash 없이 단순 실행 경로로 자동 폴백됩니다.');
-    } else {
-      console.log(`  ${M}Homebrew가 없어 자동 설치를 건너뜁니다. 풀스크린 wrapper(멀티탭/border)를 쓰려면: ${RST}${B}brew install tmux${RST}`);
-      console.log(`  ${M}tmux 없이도 crash 없이 단순 실행 경로로 자동 폴백됩니다.${RST}`);
+    const retryGuide = 'Command Line Tools 설치를 완료한 뒤 npm run build를 다시 실행하세요.';
+
+    if (!hasBrew) {
+      die(`Homebrew가 없어 tmux를 자동 설치할 수 없습니다. Homebrew 설치 후 다시 실행하세요: ${B}brew install tmux${RST}`);
     }
+
+    // xcode-select -p만으로는 부족함: 경로가 남아있어도 실제 툴체인이 깨져있을 수 있음
+    // (macOS 업데이트 후 흔한 케이스 — xcrun이 "invalid active developer path"로 실패)
+    const hasCLT = spawnSync('xcrun', ['--find', 'git'], { encoding: 'utf8' }).status === 0;
+
+    if (!hasCLT) {
+      warn('Xcode Command Line Tools가 없거나 손상되어 있어 brew install을 건너뜁니다.');
+      if (!askYesNo('손상된 Command Line Tools를 삭제하고 재설치할까요? (sudo 필요)')) {
+        die(`Command Line Tools 없이는 tmux를 설치할 수 없습니다. ${retryGuide}\n  ${M}수동 복구: ${B}sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install${RST}`);
+      }
+      console.log(`  ${M}sudo rm -rf /Library/Developer/CommandLineTools 실행 중...${RST}`);
+      const rmR = spawnSync('sudo', ['rm', '-rf', '/Library/Developer/CommandLineTools'], { stdio: 'inherit' });
+      if (rmR.status !== 0) die(`Command Line Tools 삭제에 실패했습니다. ${retryGuide}`);
+
+      console.log(`  ${M}xcode-select --install 실행 중 (macOS GUI 설치 창이 열립니다)...${RST}`);
+      spawnSync('xcode-select', ['--install'], { stdio: 'inherit' });
+      const MAX_ATTEMPTS = 5;
+      let recovered = false;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS && !recovered; attempt++) {
+        waitEnter(`GUI 설치 창에서 설치를 완료한 뒤 Enter를 눌러주세요. (${attempt}/${MAX_ATTEMPTS}) `);
+        recovered = spawnSync('xcrun', ['--find', 'git'], { encoding: 'utf8' }).status === 0;
+        if (!recovered) warn(`아직 Command Line Tools 설치가 확인되지 않았습니다. (${attempt}/${MAX_ATTEMPTS})`);
+      }
+      if (!recovered) die(`${MAX_ATTEMPTS}번 확인했지만 Command Line Tools 설치를 확인하지 못했습니다. ${retryGuide}`);
+      ok('Command Line Tools 복구 확인됨 — brew install tmux 진행합니다.');
+    }
+
+    console.log(`  ${M}brew install tmux 실행 중...${RST}`);
+    const r = spawnSync('brew', ['install', '--yes', 'tmux'], { stdio: 'inherit' });
+    if (r.status !== 0) die(`brew install tmux 실패. 수동으로 설치 후 npm run build를 다시 실행하세요: ${B}brew install tmux${RST}`);
+    ok('tmux 설치 완료 — 풀스크린 wrapper 사용 가능');
   }
 }
 
