@@ -68,7 +68,12 @@ if (isDarwin) {
   } else {
     warn('tmux가 설치되어 있지 않습니다 (macOS는 Big Sur 이후 tmux 기본 미포함)');
     const hasBrew = spawnSync('which', ['brew'], { encoding: 'utf8' }).status === 0;
-    if (hasBrew) {
+    const hasCLT  = hasBrew && spawnSync('xcode-select', ['-p'], { encoding: 'utf8' }).status === 0;
+    if (hasBrew && !hasCLT) {
+      warn('Xcode Command Line Tools가 없어 brew install을 건너뜁니다.');
+      console.log(`  ${M}먼저 설치: ${RST}${B}xcode-select --install${RST}${M}  (완료 후 brew install tmux를 직접 실행하거나 npm run build를 다시 실행하세요)${RST}`);
+      console.log(`  ${M}tmux 없이도 crash 없이 단순 실행 경로로 자동 폴백됩니다.${RST}`);
+    } else if (hasBrew) {
       console.log(`  ${M}brew install tmux 실행 중...${RST}`);
       const r = spawnSync('brew', ['install', 'tmux'], { stdio: 'inherit' });
       if (r.status === 0) ok('tmux 설치 완료 — 풀스크린 wrapper 사용 가능');
