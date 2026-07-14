@@ -25,7 +25,7 @@ node_version_ok() {
 install_node_macos() {
   if command -v brew >/dev/null 2>&1; then
     warn "Node.js ${NODE_MIN}+ 미검출 — Homebrew로 설치합니다: brew install node"
-    brew install node
+    brew install --yes node
   else
     die "Node.js가 없고 Homebrew도 없습니다. https://nodejs.org 에서 LTS를 설치한 뒤 다시 실행하세요."
   fi
