@@ -271,11 +271,64 @@ const HOME_LINKS = [
   { label: '📚 Doyclopedia', url: 'https://doiloppa.notion.site/' },
 ];
 
+const GLOBAL_SKILLS_DIR = path.join(__dirname, '_global', 'g_skills');
+
+function globalPluginManagerPrompt(tool, session) {
+  return [
+    'You are the VOID Global Plugin Manager for this named CLI profile.',
+    '',
+    `Selected profile: ${tool.name} [${session.name}]`,
+    `Profile root: ${session.configDir || '(managed by VOID)'}`,
+    `Shared skills directory: ${GLOBAL_SKILLS_DIR}`,
+    '',
+    'Help the user install, update, inspect, or remove reusable Skills and MCP integrations.',
+    'Before changing anything, explain the target, source, affected profiles, and required authentication.',
+    'Keep reusable skill files in the shared skills directory; do not duplicate them into individual profiles.',
+    'Do not delete or overwrite existing skills, MCP configuration, or credentials without explicit approval.',
+    'For MCP integrations, use this selected profile\'s supported configuration format and clearly state whether the change is profile-local or can be shared.',
+    'Start by asking what Skill or MCP integration the user wants to manage.',
+  ].join('\n');
+}
+
+async function showGlobalPluginMenu() {
+  const { getSessions } = require('./lib/storage');
+  const targets = getSessions()
+    .map(session => ({
+      session,
+      tool: config.tools.find(tool =>
+        (tool.command || '').toLowerCase() === (session.toolCommand || 'claude').toLowerCase()),
+    }))
+    .filter(target => target.tool && toolSupportsSessions(target.tool));
+
+  if (targets.length === 0) {
+    await ui.message('Global Plugin 관리는 등록된 CLI 세션이 있을 때 사용할 수 있습니다.');
+    return;
+  }
+
+  const items = targets.map((target, index) => ({
+    key: String(index + 1),
+    label: `${target.tool.name} [${target.session.name}]`,
+    desc: '이 세션의 AI로 Skills / MCP 관리',
+  }));
+  const selection = await ui.menu('Global Plugin 관리 — 세션 선택', items, { back: true });
+  if (!selection) return;
+
+  const target = targets[Number(selection.key) - 1];
+  if (!target) return;
+  fs.mkdirSync(GLOBAL_SKILLS_DIR, { recursive: true, mode: 0o700 });
+  await launchTool(
+    target.tool,
+    { type: 'session', session: target.session },
+    [globalPluginManagerPrompt(target.tool, target.session)],
+  );
+}
+
 // ── Config 서브메뉴 ───────────────────────────────────────
 
 async function showSettingsMenu(topRows) {
   const { cliSessionsMenu } = require('./lib/sessions');
   const { extTokensMenu } = require('./lib/extTokens');
+  const { getSessions } = require('./lib/storage');
   const { spawnSync } = require('child_process');
 
   while (true) {
@@ -284,6 +337,12 @@ async function showSettingsMenu(topRows) {
       { key: '2', label: 'VOID 설정', desc: 'config.yml 파일 직접 편집 ($EDITOR)' },
       { key: '3', label: 'LLM CLI 세션관리', desc: 'Claude / Codex / AGY 세션 생성 및 삭제' },
       { key: '4', label: '토큰 및 인증 관리', desc: 'API 토큰 등록, CLI 로그인 인증 및 Export' },
+      {
+        key: '5',
+        label: 'Global Plugin 관리',
+        desc: 'Skills, MCP 설치를 세션 AI에게 요청',
+        disabled: getSessions().length === 0,
+      },
     ];
 
     const sel = await ui.menu('설정 및 이력', items, { back: true, topRows });
@@ -298,6 +357,8 @@ async function showSettingsMenu(topRows) {
       await cliSessionsMenu(config, c);
     } else if (sel.key === '4') {
       await extTokensMenu(config, c);
+    } else if (sel.key === '5') {
+      await showGlobalPluginMenu();
     }
   }
 }

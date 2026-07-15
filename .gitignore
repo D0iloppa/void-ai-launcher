@@ -16,3 +16,7 @@ tmux-3.4/
 
 # 세션 작업 메모 (repo 문서 아님)
 TASK_CONTEXT.md
+
+# 공용 스킬 저장소는 로컬에 유지하되, 다운로드한 스킬 내용은 공유하지 않음
+_global/g_skills/*
+!_global/g_skills/.gitkeep

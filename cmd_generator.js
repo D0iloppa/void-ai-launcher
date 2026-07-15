@@ -46,6 +46,71 @@ const packageInstalled = name => {
   }
 };
 
+function voidStorageDir() {
+  const candidates = [
+    process.env.XDG_CONFIG_HOME ? path.join(process.env.XDG_CONFIG_HOME, 'void-launcher') : null,
+    path.join(os.homedir(), '.config', 'void-launcher'),
+    path.join(DIR, '.void-launcher'),
+    path.join(os.tmpdir(), 'void-launcher'),
+  ].filter(Boolean);
+
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      fs.accessSync(dir, fs.constants.W_OK);
+      return dir;
+    } catch {}
+  }
+  return null;
+}
+
+function linkGlobalSkills() {
+  const globalSkillsDir = path.join(DIR, '_global', 'g_skills');
+  fs.mkdirSync(globalSkillsDir, { recursive: true, mode: 0o700 });
+
+  const storage = voidStorageDir();
+  if (!storage) {
+    warn('VOID 세션 저장소에 접근할 수 없어 공용 스킬 링크를 건너뜁니다.');
+    return;
+  }
+
+  let sessions = [];
+  try {
+    sessions = JSON.parse(fs.readFileSync(path.join(storage, 'sessions.json'), 'utf8')) || [];
+  } catch {}
+
+  const profiles = sessions.filter(session => session && session.configDir && session.name);
+  if (profiles.length === 0) {
+    ok(`공용 스킬 폴더 준비됨 → ${globalSkillsDir}`);
+    console.log(`  ${M}등록된 CLI 세션이 생기면 다음 설치 시 skills 링크를 자동 생성합니다.${RST}`);
+    return;
+  }
+
+  for (const profile of profiles) {
+    const linkPath = path.join(profile.configDir, 'skills');
+    try {
+      fs.mkdirSync(profile.configDir, { recursive: true, mode: 0o700 });
+      if (fs.existsSync(linkPath)) {
+        const stat = fs.lstatSync(linkPath);
+        if (stat.isSymbolicLink()) {
+          const current = path.resolve(profile.configDir, fs.readlinkSync(linkPath));
+          if (current === path.resolve(globalSkillsDir)) {
+            ok(`${profile.toolCommand || 'cli'} [${profile.name}] 스킬 링크 확인됨`);
+            continue;
+          }
+        }
+        warn(`${profile.toolCommand || 'cli'} [${profile.name}]의 skills가 이미 존재하여 건너뜁니다: ${linkPath}`);
+        continue;
+      }
+
+      fs.symlinkSync(globalSkillsDir, linkPath, isWin ? 'junction' : 'dir');
+      ok(`${profile.toolCommand || 'cli'} [${profile.name}] → 공용 스킬 링크 생성`);
+    } catch (e) {
+      warn(`${profile.toolCommand || 'cli'} [${profile.name}] 스킬 링크 생성 실패: ${e.message}`);
+    }
+  }
+}
+
 // 대화형 stdin (GUI 설치 창처럼 스크립트가 직접 제어할 수 없는 작업을 사용자가
 // 끝낸 뒤 Enter로 알려주는 용도). fd 0는 npm/셸 wrapper를 거치며 TTY 판정이나
 // non-blocking 상태가 꼬일 수 있어, 컨트롤링 터미널을 직접 여는 /dev/tty로 읽는다.
@@ -257,7 +322,11 @@ if (isDarwin) {
   }
 }
 
-// ── 5. Register command ────────────────────────────────────────────────────
+// ── 5. Global skills ──────────────────────────────────────────────────────
+step('공용 스킬 폴더 및 프로필 링크');
+linkGlobalSkills();
+
+// ── 6. Register command ────────────────────────────────────────────────────
 if (isWin) installWindows();
 else installUnix();
 
