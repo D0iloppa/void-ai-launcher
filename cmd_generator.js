@@ -31,6 +31,14 @@ const warn = msg => console.log(`  ${Y}⚠${RST}  ${msg}`);
 const die  = msg => { console.error(`  ${R}✗${RST}  ${msg}`); process.exit(1); };
 
 const canWriteDir = dir => { try { fs.accessSync(dir, fs.constants.W_OK); return true; } catch { return false; } };
+const packageInstalled = name => {
+  try {
+    require.resolve(path.join(name, 'package.json'), { paths: [DIR] });
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 // 대화형 stdin (GUI 설치 창처럼 스크립트가 직접 제어할 수 없는 작업을 사용자가
 // 끝낸 뒤 Enter로 알려주는 용도). fd 0는 npm/셸 wrapper를 거치며 TTY 판정이나
@@ -82,14 +90,25 @@ const spawnNpm = (args, opts) =>
     ? spawnSync('cmd', ['/c', 'npm', ...args], opts)
     : spawnSync('npm', args, opts);
 const npmOpts = { cwd: DIR, env: { ...process.env, npm_config_cache: NPM_CACHE }, stdio: 'inherit' };
+const baseDeps = Object.keys(require(path.join(DIR, 'package.json')).dependencies || {});
+const missingBaseDeps = baseDeps.filter(name => !packageInstalled(name));
+const missingRuntimePkgs = RUNTIME_PKGS.filter(name => !packageInstalled(name));
 
 step('의존성 설치');
-spawnNpm(['install'], npmOpts);
-ok('js-yaml 설치 완료');
+if (missingBaseDeps.length > 0) {
+  spawnNpm(['install'], npmOpts);
+  ok(`기본 의존성 설치 완료 (${missingBaseDeps.join(', ')})`);
+} else {
+  ok('기본 의존성 이미 설치됨 — npm install 생략');
+}
 
 step('런타임 의존성 설치');
-spawnNpm(['install', '--no-save', ...RUNTIME_PKGS], npmOpts);
-ok('Claude / Codex / Gemini / Wrapper 의존성 설치 완료');
+if (missingRuntimePkgs.length > 0) {
+  spawnNpm(['install', '--no-save', ...missingRuntimePkgs], npmOpts);
+  ok(`런타임 의존성 설치 완료 (${missingRuntimePkgs.join(', ')})`);
+} else {
+  ok('런타임 의존성 이미 설치됨 — npm install 생략');
+}
 
 // ── 4. tmux check ──────────────────────────────────────────────────────────
 // Windows: tmux-windows (arndawg/tmux-windows) via winget
@@ -127,7 +146,7 @@ if (isWin) {
       } else {
         const tagResult = spawnSync('git', ['describe', '--tags', '--abbrev=0'],
           { cwd: SUBMODULE_DIR, encoding: 'utf8' });
-        const tag = tagResult.stdout.trim();
+        const tag = (tagResult.stdout || '').trim();
         if (!tag) {
           warn('서브모듈 태그를 확인할 수 없습니다.');
         } else {

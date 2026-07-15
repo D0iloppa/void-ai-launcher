@@ -108,7 +108,7 @@ function getHelpText() {
     '   - ↑ / ↓ : 메뉴 항목 이동',
     '   - ← / → : 가로 캐러셀 옵션 변경 (일반 실행의 대상 모델 등)',
     '   - Enter / 단축키 : 선택한 항목 즉시 실행',
-    '   - ESC / 0 : 이전 메뉴로 돌아가기 또는 종료',
+    '   - ESC / 0 : 이전 메뉴로 돌아가기',
     '   - : (콜론) : svc 스타일의 셸 명령어 모드로 즉시 진입',
     '   - Ctrl + C : 언제든지 런처 강제 종료',
     '   - Ctrl + D (또는 exit 입력) : tmux 세션이나 호스트 셸 실행 중 런처 메뉴(svc)로 안전하게 복귀',
@@ -369,6 +369,7 @@ async function showMainMenu() {
     { key: '2', label: '고급 모드', desc: '익명 실행 / 세션 실행 / 터미널 세션' },
     { key: '3', label: '설정 및 이력', desc: 'History 조회, VOID 설정 편집, CLI 세션/인증 관리' },
     { key: 'h', label: '도움말', desc: 'VOID 단축키 및 각 메뉴별 상세 도움말 확인' },
+    { key: 'x', label: '종료', desc: 'VOID 종료' },
   ];
 
   const sel = await ui.homeMenu({
@@ -377,7 +378,7 @@ async function showMainMenu() {
     links: HOME_LINKS,
     lastDesc,
   });
-  if (!sel) return;
+  if (!sel) return showMainMenu();
 
   switch (sel.key) {
     case 'q': {
@@ -414,6 +415,8 @@ async function showMainMenu() {
       await ui.scrollableMessage('도움말', getHelpText());
       return showMainMenu();
     }
+    case 'x':
+      return;
   }
 }
 
