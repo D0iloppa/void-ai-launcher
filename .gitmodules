@@ -1,5 +1,5 @@
 [submodule "tmux-windows"]
-	path = tmux-windows
+	path = vendor/tmux-windows
 	url = https://github.com/arndawg/tmux-windows
 [submodule "ref/orca"]
 	path = ref/orca

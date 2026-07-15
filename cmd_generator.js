@@ -139,10 +139,10 @@ if (isWin) {
 
     // 2차: tmux-windows 서브모듈의 pinned 태그 → GitHub Releases에서 tmux.exe 다운로드
     if (!tmuxInstalled) {
-      const SUBMODULE_DIR = path.join(DIR, 'tmux-windows');
+      const SUBMODULE_DIR = path.join(DIR, 'vendor', 'tmux-windows');
       const hasSubmodule = fs.existsSync(path.join(SUBMODULE_DIR, 'CMakeLists.txt'));
       if (!hasSubmodule) {
-        warn('tmux-windows 서브모듈이 초기화되지 않았습니다. git submodule update --init 을 실행하세요.');
+        warn('vendor/tmux-windows 서브모듈이 초기화되지 않았습니다. git submodule update --init 을 실행하세요.');
       } else {
         const tagResult = spawnSync('git', ['describe', '--tags', '--abbrev=0'],
           { cwd: SUBMODULE_DIR, encoding: 'utf8' });
