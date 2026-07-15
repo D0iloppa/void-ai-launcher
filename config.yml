@@ -29,3 +29,7 @@ settings:
   # 상하: 상단/하단 bar 와 콘텐츠 사이 padding row 수
   wrapper_hpad: 2   # left + right padding (cols each side)
   wrapper_vpad: 1   # top + bottom padding (rows each side)
+
+  # Windows 기본값은 ConPTY/xterm 래퍼입니다. tmux-windows는 Claude/Codex의
+  # fullscreen 화면이 깨질 수 있어, 필요할 때만 true로 설정하세요.
+  windows_use_tmux: false

@@ -14,11 +14,17 @@ const NODE_MIN   = 18;
 const NODE_BIN   = process.execPath;
 const NONI       = process.env.VOID_BUILD_NONINTERACTIVE === '1';
 const NPM_CACHE  = process.env.VOID_NPM_CACHE_DIR || path.join(os.tmpdir(), 'void-npm-cache');
-// node-pty requires MSVC native build on Windows (node-gyp) — skip explicit install;
-// it's in optionalDependencies so npm already attempted it and failures are non-fatal.
-const RUNTIME_PKGS = isWin
-  ? ['@anthropic-ai/sdk', '@google/generative-ai', 'openai']
-  : ['@anthropic-ai/sdk', '@google/generative-ai', 'node-pty', 'openai'];
+// The Windows Codex wrapper uses node-pty (ConPTY) and @xterm/headless.
+// They are optional package dependencies so a platform-specific install failure
+// does not prevent VOID itself from installing, but the build must still try to
+// install them explicitly; otherwise Windows always falls back to plain cmd.
+const RUNTIME_PKGS = [
+  '@anthropic-ai/sdk',
+  '@google/generative-ai',
+  '@xterm/headless',
+  'node-pty',
+  'openai',
+];
 
 // ── ANSI ───────────────────────────────────────────────────────────────────
 const G = '\x1b[38;2;0;230;118m', Y = '\x1b[38;2;251;191;36m',

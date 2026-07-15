@@ -229,6 +229,40 @@ function buildSessionOptions() {
   return sessions.length > 0 ? sessions.map(s => `${s.toolCommand || 'claude'}:${s.name}`) : ['(없음)'];
 }
 
+function buildQuickStartTargets(last) {
+  const { getSessions } = require('./lib/storage');
+  const sessionTargets = getSessions()
+    .map(session => {
+      const command = (session.toolCommand || 'claude').toLowerCase();
+      const tool = config.tools.find(t => (t.command || '').toLowerCase() === command);
+      if (!tool) return null;
+      return {
+        tool,
+        mode: { type: 'session', session },
+        label: `${tool.name} [${session.name}]`,
+        matchesLast: Boolean(last && last.sessionName === session.name &&
+          (last.sessionToolCommand || tool.command).toLowerCase() === command),
+      };
+    })
+    .filter(Boolean);
+
+  const normalTargets = config.tools.map(tool => ({
+    tool,
+    mode: false,
+    label: tool.name,
+    matchesLast: Boolean(last && !last.sessionName && !last.isAnon &&
+      (last.toolName || '').toLowerCase() === tool.name.toLowerCase()),
+  }));
+
+  const targets = [...sessionTargets, ...normalTargets];
+  const lastTargetIndex = targets.findIndex(target => target.matchesLast);
+  return {
+    targets,
+    options: targets.map(target => target.label),
+    optionIndex: lastTargetIndex >= 0 ? lastTargetIndex : 0,
+  };
+}
+
 const HOME_LINKS = [
   { label: '🏠 Doil G.W', url: 'https://doil.me' },
   { label: '💻 ADMIN console', url: 'https://doil.me/admin' },
@@ -353,18 +387,23 @@ async function showCommandMode() {
 
 async function showMainMenu() {
   const last = getLast();
-  const lastTag = last
-    ? last.sessionName ? ` [${last.sessionName}]` : (last.isAnon ? ' [익명]' : '')
-    : '';
   const lastDesc = last ? `${describeLaunch(last)} · ${timeSince(last.timestamp)}` : null;
   const toolNames = config.tools.map(t => t.name);
   const tokenOpts = buildTokenOptions();
   const sessionOpts = buildSessionOptions();
+  const quickStart = buildQuickStartTargets(last);
   const hasTokens = tokenOpts[0] !== '(없음)';
   const hasSessions = sessionOpts[0] !== '(없음)';
 
   const items = [
-    { key: 'q', label: '빠른 시작', desc: lastDesc || '이력 없음', disabled: !last },
+    {
+      key: 'q',
+      label: '빠른 시작',
+      options: quickStart.options,
+      optionIndex: quickStart.optionIndex,
+      desc: lastDesc || '등록된 세션 또는 일반 실행 대상 선택',
+      disabled: quickStart.targets.length === 0,
+    },
     { key: '1', label: '일반 실행', options: toolNames },
     { key: '2', label: '고급 모드', desc: '익명 실행 / 세션 실행 / 터미널 세션' },
     { key: '3', label: '설정 및 이력', desc: 'History 조회, VOID 설정 편집, CLI 세션/인증 관리' },
@@ -382,19 +421,11 @@ async function showMainMenu() {
 
   switch (sel.key) {
     case 'q': {
-      if (last) {
-        const tool = findTool(last.toolName);
-        const mode = last.sessionName
-          ? {
-            type: 'session',
-            session: {
-              name: last.sessionName,
-              toolCommand: last.sessionToolCommand || tool?.command || 'claude',
-              configDir: resolveSessionConfigDir(last.sessionToolCommand || tool?.command || 'claude', last.sessionName),
-            },
-          }
-          : (last.isAnon ? 'anon' : false);
-        if (tool) await launchTool(tool, mode, last.extraArgs || []);
+      const target = quickStart.targets[sel.optionIndex];
+      if (target) {
+        // 기존 빠른 시작처럼 마지막 실행 대상을 다시 고르면 인수도 함께 복원한다.
+        const extraArgs = target.matchesLast ? (last?.extraArgs || []) : [];
+        await launchTool(target.tool, target.mode, extraArgs);
       }
       return showMainMenu(); // tool 종료 후에도 메뉴 복귀
     }
