@@ -9,11 +9,14 @@
   "files": [
     "launcher.js",
     "lib/",
-    "config.yml",
+    "themes/",
+    "scripts/",
     "cmd_generator.js",
-    "CLAUDE.md"
+    "CLAUDE.md",
+    "ONBOARDING.md"
   ],
   "scripts": {
+    "preinstall": "node ./scripts/install-djinn.js",
     "start": "node launcher.js",
     "check": "node --check launcher.js && node --check lib/*.js",
     "build": "node ./cmd_generator.js"

@@ -30,13 +30,20 @@ Global install makes `void` available as a system command. Direct invocation: `v
 | `ui.js` | All TUI rendering: box/frame drawing, CJK-aware column width, raw-mode keypress loop, `menu()` / `homeMenu()` / `message()` / `input()` |
 | `sessions.js` | tmux session management + named CLI sessions (create/delete per tool) |
 | `storage.js` | JSON persistence in `~/.config/void-launcher/` (XDG fallback chain): `last.json`, `history.json`, `sessions.json` |
-| `config.js` | `config.json` token store (API keys per service/alias); `getToken` / `getAllTokens` |
-| `theme.js` | Loads built-in color themes (`green-black`, `red-void`, etc.) and applies `config.yml` overrides |
+| `config.js` | Thin shim over `configDb.js`; `getToken` / `getAllTokens` (API keys per service/alias) |
+| `configDb.js` | SQLite-backed config store (dJinn/`better-sqlite3`, `config.djinn.db`) — tools list, theme, settings, API tokens. One-time migration from legacy `config.json`/`config.yml` on first run |
+| `theme.js` | Loads built-in color themes from `themes/` and applies overrides from `configDb.js` |
 | `tokens.js` | Interactive token management UI |
 | `prompt.js` | Direct Anthropic/OpenAI/Google prompt mode (uses optional SDK deps) |
 | `extTokens.js` | External token export command UI |
+| `assistant.js` | Personal Assistant profiles — isolated `uv` Python venv + `vendor/void-assistant` session per profile |
+| `cliPreflight.js` | Detects/installs AI tool CLIs (`claude`/`codex`/`agy`) before launch |
+| `miniShell.js` | Ephemeral raw-mode shell overlay (e.g. token-issuing terminal from the Tokens menu) |
+| `usageDb.js` | SQLite-backed usage cache + rate-limit backoff windows (`usage-cache.djinn.db`) |
+| `usageMeter.js` | Fetches Claude/Codex usage (OAuth/backend API → RPC → hidden-PTY scrape fallback tiers) |
+| `usageWarmup.js` | Background polling that keeps `usageMeter.js`'s cache warm |
 
-**`config.yml`** — tools list + theme + settings. Only file to edit when adding a new AI tool. Tool entries: `name`, `command`, `args[]`, optional `anonymous_args[]`. Settings: `anonymous_home_prefix`, `wrapper_hpad`, `wrapper_vpad`.
+**Config storage**: tools list + theme + settings + API tokens are stored in a SQLite DB (`lib/configDb.js`, via dJinn) at `~/.config/void-launcher/config.djinn.db`. Legacy `config.json`/`config.yml` at the repo root are migrated in-place (renamed to `.migrated`) on first run and are no longer the source of truth. Tool entries: `name`, `command`, `args[]`, optional `anonymous_args[]`. Settings: `anonymous_home_prefix`, `wrapper_hpad`, `wrapper_vpad`. Edit tools/theme/settings through the interactive menu (or `configDb.setTools`/`setTheme`/`setSettings`), not by hand-editing a YAML file.
 
 ## Key behaviors
 
@@ -44,7 +51,7 @@ Global install makes `void` available as a system command. Direct invocation: `v
 
 **Named sessions**: `CLAUDE_CONFIG_DIR=~/.claude-<name>` for claude, `CODEX_HOME=~/.codex-<name>` for codex. Session metadata (name, toolCommand, configDir, created_at) stored in `storage.js`.
 
-**Wrapper frame**: `wrapper.js` uses ANSI scroll region (`\x1b[top;botr`) + left/right margin (`\x1b[?69h` + `\x1b[left;rights`) to constrain PTY output. `wrapper_hpad`/`wrapper_vpad` in config.yml control the padding between border and content. `runWrappedShell` adds a Ctrl+A prefix-key multiplexer (h/l tabs, c new shell, x close, 1-9 jump, `:` command mode).
+**Wrapper frame**: `wrapper.js` uses ANSI scroll region (`\x1b[top;botr`) + left/right margin (`\x1b[?69h` + `\x1b[left;rights`) to constrain PTY output. `wrapper_hpad`/`wrapper_vpad` (from `configDb.getSettings()`) control the padding between border and content. `runWrappedShell` adds a Ctrl+A prefix-key multiplexer (h/l tabs, c new shell, x close, 1-9 jump, `:` command mode).
 
 **Menu navigation**: arrow keys move selection, left/right cycle options on combo rows, Enter/hotkey confirms, `0`/Esc goes back. Home screen has a two-column layout (logo + links box side by side, menu box below) that degrades to compact mode below 88 cols or 24 rows.
 
@@ -52,6 +59,7 @@ Global install makes `void` available as a system command. Direct invocation: `v
 
 ## Dependencies
 
-- `js-yaml` — required, parses `config.yml`
+- `js-yaml` — required, parses the legacy `config.yml` during one-time migration to `configDb.js`
 - `node-pty` — optional, enables the framed wrapper UI; falls back to raw spawnSync without it
 - `@anthropic-ai/sdk`, `openai`, `@google/generative-ai` — optional, used by `prompt.js`
+- `@d0iloppa/djinn` (`vendor/dJinn` submodule) and its `better-sqlite3` dependency — mandatory, installed by a `preinstall` script (`scripts/install-djinn.js`) from a committed vendor tgz, with a submodule-build fallback

@@ -4,3 +4,9 @@
 [submodule "ref/orca"]
 	path = ref/orca
 	url = https://github.com/stablyai/orca
+[submodule "vendor/dJinn"]
+	path = vendor/dJinn
+	url = https://github.com/D0iloppa/dJinn.git
+[submodule "vendor/void-assistant"]
+	path = vendor/void-assistant
+	url = /mnt/c/DEV/void-assistant

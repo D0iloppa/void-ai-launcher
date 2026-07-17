@@ -37,13 +37,14 @@ const warn = msg => console.log(`  ${Y}⚠${RST}  ${msg}`);
 const die  = msg => { console.error(`  ${R}✗${RST}  ${msg}`); process.exit(1); };
 
 const canWriteDir = dir => { try { fs.accessSync(dir, fs.constants.W_OK); return true; } catch { return false; } };
+// Checks node_modules directly rather than require.resolve(name + '/package.json'):
+// packages that ship a restrictive "exports" map without a "./package.json" entry
+// (ink, openai, @anthropic-ai/sdk as of the versions this project pins) make
+// require.resolve throw ERR_PACKAGE_PATH_NOT_EXPORTED even when installed,
+// which made every build re-run npm install for them regardless of platform.
 const packageInstalled = name => {
-  try {
-    require.resolve(path.join(name, 'package.json'), { paths: [DIR] });
-    return true;
-  } catch {
-    return false;
-  }
+  try { return fs.existsSync(path.join(DIR, 'node_modules', name, 'package.json')); }
+  catch { return false; }
 };
 
 function voidStorageDir() {
@@ -164,11 +165,17 @@ const npmOpts = { cwd: DIR, env: { ...process.env, npm_config_cache: NPM_CACHE }
 const baseDeps = Object.keys(require(path.join(DIR, 'package.json')).dependencies || {});
 const missingBaseDeps = baseDeps.filter(name => !packageInstalled(name));
 const missingRuntimePkgs = RUNTIME_PKGS.filter(name => !packageInstalled(name));
+// @d0iloppa/djinn is mandatory but deliberately not listed in package.json
+// "dependencies" (it's installed via the preinstall hook — see
+// scripts/install-djinn.js), so missingBaseDeps alone can't detect a missing
+// dJinn install on a re-run where every other base dep is already present.
+const djinnMissing = !packageInstalled('@d0iloppa/djinn');
 
 step('의존성 설치');
-if (missingBaseDeps.length > 0) {
-  spawnNpm(['install'], npmOpts);
-  ok(`기본 의존성 설치 완료 (${missingBaseDeps.join(', ')})`);
+if (missingBaseDeps.length > 0 || djinnMissing) {
+  const r = spawnNpm(['install'], npmOpts);
+  if (r.status !== 0) die('npm install 실패 (기본 의존성)');
+  ok(`기본 의존성 설치 완료 (${missingBaseDeps.join(', ') || '@d0iloppa/djinn'})`);
 } else {
   ok('기본 의존성 이미 설치됨 — npm install 생략');
 }
