@@ -54,13 +54,60 @@ function findCommittedTgz() {
   return match ? path.join(VENDOR_DIR, match) : null;
 }
 
-function installTgz(tgzPath) {
-  log(`installing @d0iloppa/djinn from ${path.relative(ROOT, tgzPath)} ...`);
+// WSL/DrvFs 환경 (예: /mnt/c/... 로 마운트된 저장소)에서 실행 중인 void/launcher
+// 프로세스가 better-sqlite3의 네이티브 .node 바이너리를 mmap으로 열고 있으면,
+// npm의 arborist가 reify 도중 better-sqlite3를 rename하려다 EACCES로 실패한다
+// (권한이 0777이어도 실패함 — DrvFs 특성이지 dJinn/sqlite-vec 결함이 아니며,
+// sqlite-vec만 단독 설치해도 재현된다). 이 신호를 감지해서 안내 메시지를 띄운다.
+function isBetterSqlite3RenameEacces(text) {
+  return /EACCES/.test(text) && (/better-sqlite3/.test(text) || /rename/i.test(text));
+}
+
+function npmInstallOnce(tgzPath) {
+  // stdout은 그대로 inherit해서 npm 진행 로그를 실시간으로 보여주고, stderr만
+  // pipe로 받아 실패 시 원인 텍스트를 검사할 수 있게 한다 (성공 시에는 execSync가
+  // 캡처된 stderr에 접근할 방법을 주지 않으므로 실패 시에만 그대로 재출력한다).
   execSync(`npm install ${JSON.stringify(tgzPath)} --no-save --no-audit --no-fund`, {
     cwd: ROOT,
-    stdio: 'inherit',
+    stdio: ['inherit', 'inherit', 'pipe'],
   });
-  log('@d0iloppa/djinn installed.');
+}
+
+function installTgz(tgzPath) {
+  log(`installing @d0iloppa/djinn from ${path.relative(ROOT, tgzPath)} ...`);
+
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      npmInstallOnce(tgzPath);
+      log('@d0iloppa/djinn installed.');
+      return;
+    } catch (e) {
+      const stderrText = e && e.stderr ? e.stderr.toString() : '';
+      if (stderrText) process.stderr.write(stderrText);
+
+      if (!isBetterSqlite3RenameEacces(`${(e && e.message) || ''}\n${stderrText}`)) {
+        throw e; // unrelated failure — propagate as-is, no special handling
+      }
+
+      if (attempt === 1) {
+        // A running void/launcher process can transiently hold the lock;
+        // one short retry is cheap and sometimes enough on its own.
+        log('npm install hit an EACCES rename error — this can be a transient lock; retrying once...');
+        try {
+          execSync(process.platform === 'win32' ? 'ping -n 2 127.0.0.1 >NUL' : 'sleep 1', { stdio: 'ignore' });
+        } catch {
+          /* best-effort delay only, ignore failures */
+        }
+        continue;
+      }
+
+      err('npm install failed again with an EACCES error while renaming better-sqlite3.');
+      err('Likely cause: a running `void`/launcher process (or another node process using this repo) still has the native SQLite binary (better-sqlite3\'s .node file) memory-mapped open.');
+      err('On WSL, when this repo is on a Windows drive mounted via DrvFs (e.g. /mnt/c/...), renaming a file/directory that is mmap-open elsewhere fails with EACCES even though permissions are 0777 — this is a DrvFs limitation, not a dJinn/sqlite-vec defect (it reproduces installing sqlite-vec alone).');
+      err('Fix: close all running `void` sessions (and any other node process with this repo open), then re-run the install.');
+      throw e;
+    }
+  }
 }
 
 function buildTgzFromSubmodule() {

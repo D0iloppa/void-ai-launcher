@@ -3,6 +3,9 @@
   "version": "2.0.0",
   "description": "VOID//ai-launcher — comprehensive AI CLI router",
   "main": "launcher.js",
+  "engines": {
+    "node": ">=18"
+  },
   "bin": {
     "void": "./launcher.js"
   },
