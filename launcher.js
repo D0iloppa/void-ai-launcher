@@ -562,6 +562,7 @@ async function showSettingsMenu(topRows) {
       },
       { key: '6', label: 'Agent CLI 관리', desc: '설치 상태 확인 및 설치' },
       { key: '7', label: '사용량 조회', desc: 'Claude/Codex 사용량 확인' },
+      { key: '8', label: '세션 동기화', desc: '다른 기기와 네임드 세션을 WebSocket으로 동기화' },
     ];
 
     const sel = await ui.menu('설정 및 이력', items, { back: true, topRows });
@@ -581,6 +582,8 @@ async function showSettingsMenu(topRows) {
       await agentCliMenu(config, c);
     } else if (sel.key === '7') {
       await showUsageMenu();
+    } else if (sel.key === '8') {
+      await require('./lib/sync').syncMenu(config, c);
     }
   }
 }

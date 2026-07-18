@@ -42,6 +42,7 @@ Global install makes `void` available as a system command. Direct invocation: `v
 | `usageDb.js` | SQLite-backed usage cache + rate-limit backoff windows (`usage-cache.djinn.db`) |
 | `usageMeter.js` | Fetches Claude/Codex usage (OAuth/backend API → RPC → hidden-PTY scrape fallback tiers) |
 | `usageWarmup.js` | Background polling that keeps `usageMeter.js`'s cache warm |
+| `sync.js` | Syncs named-session profiles between two void installs over WebSocket (LAN/VPN, no relay) — pairing-code Export/Import, AES-256-GCM framed transfer |
 
 **Config storage**: tools list + theme + settings + API tokens are stored in a SQLite DB (`lib/configDb.js`, via dJinn) at `~/.config/void-launcher/config.djinn.db`. Legacy `config.json`/`config.yml` at the repo root are migrated in-place (renamed to `.migrated`) on first run and are no longer the source of truth. Tool entries: `name`, `command`, `args[]`, optional `anonymous_args[]`. Settings: `anonymous_home_prefix`, `wrapper_hpad`, `wrapper_vpad`. Edit tools/theme/settings through the interactive menu (or `configDb.setTools`/`setTheme`/`setSettings`), not by hand-editing a YAML file.
 
@@ -61,5 +62,6 @@ Global install makes `void` available as a system command. Direct invocation: `v
 
 - `js-yaml` — required, parses the legacy `config.yml` during one-time migration to `configDb.js`
 - `node-pty` — optional, enables the framed wrapper UI; falls back to raw spawnSync without it
+- `ws` — required, WebSocket server/client used by `lib/sync.js` for the session-sync Export/Import flow
 - `@anthropic-ai/sdk`, `openai`, `@google/generative-ai` — optional, used by `prompt.js`
 - `@d0iloppa/djinn` (`vendor/dJinn` submodule) and its `better-sqlite3` dependency — mandatory, installed by a `preinstall` script (`scripts/install-djinn.js`) from a committed vendor tgz, with a submodule-build fallback
