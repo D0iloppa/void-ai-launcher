@@ -26,3 +26,6 @@ _global/g_skills/*
 
 # void-context 그래프 DB (postinstall 로 로컬 생성, -wal/-shm 사이드카 포함)
 void-context.djinn.db*
+
+# void-messages 그래프 DB (lib/messaging/store.js 가 최초 사용 시 로컬 생성)
+void-messages.djinn.db*

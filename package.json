@@ -23,7 +23,8 @@
     "postinstall": "node ./scripts/init-void-context.js",
     "start": "node launcher.js",
     "check": "node --check launcher.js && node --check lib/*.js && node --check lib/experiments/*.js && node --check lib/messaging/*.js",
-    "build": "node ./cmd_generator.js"
+    "build": "node ./cmd_generator.js",
+    "test": "node --test test/"
   },
   "dependencies": {
     "ink": "^4.4.1",
