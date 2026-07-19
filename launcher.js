@@ -202,6 +202,7 @@ function getHelpText() {
     '  void prompt',
     '  void tokens',
     '  void sessions',
+    '  void update',
     '  void <tool> [args...] [--anon]',
     '',
     'Configured tools:',
@@ -278,6 +279,33 @@ async function handleArgs(argv) {
     }
     case 'host': {
       await runHostShell(c, config);
+      return;
+    }
+    case 'update': {
+      // 인수 직행(void update) — 대화형 메뉴가 아니므로 확인 프롬프트 없이
+      // checkUpdate → (뒤처져 있으면) applyUpdate 를 그대로 실행한다. 이미
+      // void update 를 명시적으로 입력한 것 자체가 사용자의 동의다.
+      const selfUpdate = require('./lib/selfUpdate');
+      const check = selfUpdate.checkUpdate();
+      if (!check.available) {
+        console.log('git 저장소가 아니어서 자동 업데이트를 사용할 수 없습니다.');
+        return;
+      }
+      if (!check.clean) {
+        console.log('로컬에 커밋되지 않은 변경 사항이 있어 업데이트를 건너뜁니다.');
+        return;
+      }
+      if (!check.behind) {
+        console.log('이미 최신 버전입니다.');
+        return;
+      }
+      console.log(`업데이트가 있습니다 (${check.behind}개 커밋 뒤처짐) — 적용 중...`);
+      const result = selfUpdate.applyUpdate();
+      if (result.ok) {
+        console.log('업데이트 완료' + (result.npmFailed ? ' (npm install 실패 — 수동 확인 필요)' : ''));
+      } else {
+        console.log(`업데이트 실패: ${result.reason || '알 수 없는 오류'}`);
+      }
       return;
     }
     default: {
@@ -482,10 +510,14 @@ async function showVoidSettingsScreen(topRows) {
   const vpadOpts   = ['0', '1', '2'];
   const emojiOpts  = ['켜짐', '꺼짐'];
 
+  const updateCheckOpts = ['켜짐', '꺼짐'];
+
   const s = config.settings || {};
   const curHpad  = typeof s.wrapper_hpad === 'number' ? s.wrapper_hpad : 2;
   const curVpad  = typeof s.wrapper_vpad === 'number' ? s.wrapper_vpad : 1;
   const curEmoji = typeof s.double_width_emoji === 'boolean' ? s.double_width_emoji : true;
+  // 기본값 true — 명시적으로 false 로 꺼둔 경우에만 꺼짐으로 표시
+  const curUpdateCheck = s.update_check_on_start !== false;
 
   const items = [
     { key: '1', label: '테마', options: themeNames,
@@ -495,6 +527,7 @@ async function showVoidSettingsScreen(topRows) {
     { key: '3', label: '프레임 세로 여백', options: vpadOpts,
       optionIndex: Math.max(0, vpadOpts.indexOf(String(curVpad))) },
     { key: '4', label: '이모지 2칸 폭', options: emojiOpts, optionIndex: curEmoji ? 0 : 1 },
+    { key: '5', label: '시작 시 업데이트 확인', options: updateCheckOpts, optionIndex: curUpdateCheck ? 0 : 1 },
     { key: 's', label: '저장', desc: '변경 사항 저장 및 즉시 적용' },
   ];
 
@@ -523,16 +556,18 @@ async function showVoidSettingsScreen(topRows) {
       const hpad  = parseInt(hpadOpts[items[1].optionIndex], 10);
       const vpad  = parseInt(vpadOpts[items[2].optionIndex], 10);
       const emoji = items[3].optionIndex === 0;
+      const updateCheckOnStart = items[4].optionIndex === 0;
 
       // 기존 테마 문서를 스프레드 후 name만 덮어씀 — 그렇지 않으면 사용자가
       // 이전에 설정해둔 theme.colors 개별 오버라이드(loadTheme()이 지원하는
       // 문서화된 기능, config.yml.migrated에 예시로 남아있음)가 매 저장마다
       // 조용히 삭제됨(독립 리뷰가 발견한 should-fix).
       configDb.setTheme({ ...configDb.getTheme(), name });
-      // 관리하는 3개 키만 덮어써 anonymous_home_prefix 등 나머지 필드 보존
+      // 관리하는 키들만 덮어써 anonymous_home_prefix 등 나머지 필드 보존
       configDb.setSettings({
         ...configDb.getSettings(),
         wrapper_hpad: hpad, wrapper_vpad: vpad, double_width_emoji: emoji,
+        update_check_on_start: updateCheckOnStart,
       });
       config.theme    = configDb.getTheme();
       config.settings = configDb.getSettings();
@@ -574,6 +609,7 @@ async function showSettingsMenu(topRows) {
       { key: '6', label: 'Agent CLI 관리', desc: '설치 상태 확인 및 설치' },
       { key: '7', label: '사용량 조회', desc: 'Claude/Codex 사용량 확인' },
       { key: '8', label: '세션 동기화', desc: '다른 기기와 네임드 세션을 WebSocket으로 동기화' },
+      { key: '9', label: '업데이트 확인/적용', desc: 'git 기반 자동 업데이트 확인 및 적용' },
     ];
 
     const sel = await ui.menu('설정 및 이력', items, { back: true, topRows });
@@ -595,8 +631,71 @@ async function showSettingsMenu(topRows) {
       await showUsageMenu();
     } else if (sel.key === '8') {
       await require('./lib/sync').syncMenu(config, c);
+    } else if (sel.key === '9') {
+      await showUpdateMenu();
     }
   }
+}
+
+// 설정 및 이력 → 업데이트 확인/적용. checkUpdate() 로 원격 대비 상태를 확인하고,
+// 뒤처져 있으면 사용자 확인(예/아니오, sessions.js 의 삭제 확인 메뉴와 동일한
+// back:true 두 옵션 패턴) 후 applyUpdate() 를 실행한다. 적용 성공 시 현재
+// 실행 중인 launcher.js 프로세스를 그대로 재기동한다 — --sudo 재실행(상단,
+// spawnSync(process.execPath 대신 sudo 사용))과 동일한 발상이지만, 여기서는
+// 쉘 wrapper 를 다시 거치지 않고 이 프로세스 자체를 process.execPath + __filename
+// 으로 곧장 재실행해 모든 플랫폼(Windows 포함)에서 동일하게 동작한다.
+async function showUpdateMenu() {
+  const selfUpdate = require('./lib/selfUpdate');
+  const check = selfUpdate.checkUpdate();
+
+  if (!check.available) {
+    await ui.message('이 설치본은 git 저장소가 아니어서 자동 업데이트를 사용할 수 없습니다.');
+    return;
+  }
+  if (!check.clean) {
+    await ui.message(c.warn + '로컬에 커밋되지 않은 변경 사항이 있어 업데이트를 건너뜁니다.' + c.RESET + '\n\n' +
+      c.muted2 + '  git status 로 확인 후 커밋/스태시 하고 다시 시도해 주세요.' + c.RESET);
+    return;
+  }
+  if (!check.behind) {
+    await ui.message(c.ok + '✓ 이미 최신 버전입니다.' + c.RESET);
+    return;
+  }
+
+  const peers = selfUpdate.peersAlive();
+  if (peers > 0) {
+    await ui.message(
+      c.warn + `다른 void 프로세스가 ${peers}개 실행 중입니다.` + c.RESET + '\n\n' +
+      c.muted2 + '  계속 진행할 수 있지만, 업데이트 후 재시작하면 이 프로세스만 재기동되고' + c.RESET + '\n' +
+      c.muted2 + '  나머지 실행 중인 프로세스는 이전 버전으로 계속 동작합니다.' + c.RESET
+    );
+  }
+
+  const confirmSel = await ui.menu(`업데이트 적용 — ${check.behind}개 커밋 뒤처짐`, [
+    { key: '1', label: '예', desc: '지금 업데이트하고 재시작' },
+    { key: '2', label: '아니오' },
+  ], { back: true });
+  if (!confirmSel || confirmSel.key !== '1') return;
+
+  const result = selfUpdate.applyUpdate();
+  if (!result.ok) {
+    await ui.message(c.warn + `업데이트 실패: ${result.reason || '알 수 없는 오류'}` + c.RESET);
+    return;
+  }
+
+  await ui.message(
+    c.ok + '✓ 업데이트 완료 — 재시작합니다.' + c.RESET +
+    (result.npmFailed
+      ? '\n\n' + c.warn + 'npm install 이 실패했습니다. 수동으로 다시 실행해 주세요.' + c.RESET
+      : '')
+  );
+
+  // --sudo 재실행(상단 49-59행)과 동일한 발상의 clean teardown + 재기동.
+  ui.exitAltScreen();
+  ui.showCursor();
+  const { spawnSync: _sx } = require('child_process');
+  const res = _sx(process.execPath, [__filename], { stdio: 'inherit' });
+  process.exit(res.status ?? 0);
 }
 
 // 사용량 조회 — Claude/Codex 세션·주간 rate-limit 사용률을 읽기 전용으로 표시.
