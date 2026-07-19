@@ -352,10 +352,16 @@ function installUnix() {
 
   step('실행 권한 설정');
   fs.chmodSync(path.join(DIR, 'launcher.js'), 0o755);
+  fs.chmodSync(path.join(DIR, 'bootstrap.js'), 0o755);
   ok('launcher.js +x');
+  ok('bootstrap.js +x');
 
+  // wrapper 는 launcher.js 를 직접 실행하지 않고 bootstrap.js 를 거친다 — 시작 시
+  // 업데이트 체크(void 설정 update_check_on_start, 기본 켜짐)를 위한 자리.
+  // bootstrap.js 는 실패해도 항상 launcher.js 를 그대로 실행하므로(fail-open,
+  // lib/selfUpdate.js 참고) 이 한 단계 추가가 기존 실행 경로를 막지 않는다.
   step(`void 명령어 설치  →  ${bin}`);
-  const wrapper = `#!/usr/bin/env bash\nexport _VOID_BIN="${bin}"\nexec "${NODE_BIN}" "${DIR}/launcher.js" "$@"\n`;
+  const wrapper = `#!/usr/bin/env bash\nexport _VOID_BIN="${bin}"\nexec "${NODE_BIN}" "${DIR}/bootstrap.js" "$@"\n`;
 
   if (canWriteDir('/usr/local/bin')) {
     fs.writeFileSync(bin, wrapper, { mode: 0o755 });
@@ -383,11 +389,13 @@ function installWindows() {
 
   // npm global prefix → e.g. C:\Users\<user>\AppData\Roaming\npm
   const npmPrefix = (spawnNpm(['prefix', '-g'], { encoding: 'utf8' }).stdout || '').trim();
-  const launcherAbs = path.win32.join(DIR, 'launcher.js');
+  // launcher.js 대신 bootstrap.js 를 실행 — Unix wrapper와 동일하게 시작 시
+  // 업데이트 체크를 거친 뒤 launcher.js 를 그대로 실행한다(fail-open).
+  const bootstrapAbs = path.win32.join(DIR, 'bootstrap.js');
 
   // .cmd for cmd.exe / bat, .ps1 for PowerShell
-  const cmdContent = `@echo off\r\n"${NODE_BIN}" "${launcherAbs}" %*\r\n`;
-  const ps1Content = `#!/usr/bin/env pwsh\n& "${NODE_BIN}" "${launcherAbs}" @args\n`;
+  const cmdContent = `@echo off\r\n"${NODE_BIN}" "${bootstrapAbs}" %*\r\n`;
+  const ps1Content = `#!/usr/bin/env pwsh\n& "${NODE_BIN}" "${bootstrapAbs}" @args\n`;
 
   try {
     fs.writeFileSync(path.join(npmPrefix, 'void.cmd'), cmdContent);

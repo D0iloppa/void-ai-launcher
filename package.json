@@ -7,10 +7,11 @@
     "node": ">=18"
   },
   "bin": {
-    "void": "./launcher.js"
+    "void": "./bootstrap.js"
   },
   "files": [
     "launcher.js",
+    "bootstrap.js",
     "lib/",
     "themes/",
     "scripts/",
@@ -22,7 +23,7 @@
     "preinstall": "node ./scripts/install-djinn.js",
     "postinstall": "node ./scripts/init-void-context.js",
     "start": "node launcher.js",
-    "check": "node --check launcher.js && node --check lib/*.js && node --check lib/experiments/*.js && node --check lib/messaging/*.js",
+    "check": "node --check launcher.js && node --check bootstrap.js && node --check lib/*.js && node --check lib/experiments/*.js && node --check lib/messaging/*.js",
     "build": "node ./cmd_generator.js",
     "test": "node --test test/"
   },
