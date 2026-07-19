@@ -3,6 +3,9 @@ node_modules/
 # 사용자 설정 (토큰, 세션 등 민감 정보)
 config.json
 
+# 레거시 config → configDb 마이그레이션 후 남는 로컬 산출물 (토큰 포함 가능, 커밋 금지)
+*.migrated
+
 # void-launcher 런타임 데이터 (XDG 경로에 저장되지만 혹시 로컬에 생길 경우 대비)
 .void-launcher/
 
@@ -20,3 +23,6 @@ TASK_CONTEXT.md
 # 공용 스킬 저장소는 로컬에 유지하되, 다운로드한 스킬 내용은 공유하지 않음
 _global/g_skills/*
 !_global/g_skills/.gitkeep
+
+# void-context 그래프 DB (postinstall 로 로컬 생성, -wal/-shm 사이드카 포함)
+void-context.djinn.db*

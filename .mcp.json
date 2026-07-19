@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "void-context": {
+      "command": "node",
+      "args": ["lib/voidContextMcp.js"]
+    }
+  }
+}

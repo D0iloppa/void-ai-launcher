@@ -43,6 +43,11 @@ Global install makes `void` available as a system command. Direct invocation: `v
 | `usageMeter.js` | Fetches Claude/Codex usage (OAuth/backend API → RPC → hidden-PTY scrape fallback tiers) |
 | `usageWarmup.js` | Background polling that keeps `usageMeter.js`'s cache warm |
 | `sync.js` | Syncs named-session profiles between two void installs over WebSocket (LAN/VPN, no relay) — pairing-code Export/Import, AES-256-GCM framed transfer |
+| `graphLayer.js` | Shared dJinn Graph Catalog bootstrap (`initVoidGraphLayer`) factored out of `aggregator.js` — per-call closure over db/graph state, used by both the aggregator stack and the void-context stack |
+| `voidContext.js` | void-context graph accessors (`putContext`/`getContext`/`listContexts`/`findRecentContexts`/`putTaskContext`/`getTaskContext`/`listTaskContext`) — schema authority for a 2-level task-context graph in its own DB file; expose-only, not wired into launcher flows |
+| `voidContextMcp.js` | Thin stdio MCP entry point (`node lib/voidContextMcp.js`) that serves the void-context graph via dJinn's built-in MCP (`serveMcp`) |
+
+**void-context**: a separate dJinn DB, `void-context.djinn.db` (repo root, gitignored), initialized by the `postinstall` script (`scripts/init-void-context.js`) and exposed to MCP clients via `.mcp.json` (`node lib/voidContextMcp.js`). Namespace `void_context` (underscore — `GraphDriver`'s `NS_RE` rejects hyphens). Level-2 nodes are contexts (`node_key = task_id`); a reserved `_schema` node documents the field layout and is filtered out of listings.
 
 **Config storage**: tools list + theme + settings + API tokens are stored in a SQLite DB (`lib/configDb.js`, via dJinn) at `~/.config/void-launcher/config.djinn.db`. Legacy `config.json`/`config.yml` at the repo root are migrated in-place (renamed to `.migrated`) on first run and are no longer the source of truth. Tool entries: `name`, `command`, `args[]`, optional `anonymous_args[]`. Settings: `anonymous_home_prefix`, `wrapper_hpad`, `wrapper_vpad`. Edit tools/theme/settings through the interactive menu (or `configDb.setTools`/`setTheme`/`setSettings`), not by hand-editing a YAML file.
 
