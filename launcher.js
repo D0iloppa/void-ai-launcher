@@ -1241,18 +1241,18 @@ async function showAssistantMenu() {
   }
 }
 
-// EXPERIMENTAL — phase 1(수동 계정 전환)만 구현됨. lib/experiments/switchProfile.js
+// void-persistent — phase 1(수동 계정 전환)만 구현됨. lib/void-persistent/switchProfile.js
 // 가 없거나(node-pty/@xterm/headless 미가용) require 가 실패하면 메뉴 아이템
 // 자체를 숨긴다 — 나머지 고급 메뉴 동작은 전혀 건드리지 않는다.
-function experimentsAvailable() {
+function voidPersistentAvailable() {
   try {
-    return require('./lib/experiments/switchProfile').isAvailable();
+    return require('./lib/void-persistent/switchProfile').isAvailable();
   } catch {
     return false;
   }
 }
 
-async function experimentsCreateProfileFlow(switchProfile) {
+async function voidPersistentCreateProfileFlow(switchProfile) {
   const rawName = await ui.input('Persist 프로필 이름 (영문/숫자/-): ');
   if (rawName === null) return;
   const name = rawName.trim();
@@ -1261,7 +1261,7 @@ async function experimentsCreateProfileFlow(switchProfile) {
     return;
   }
   try {
-    const configDir = switchProfile.createExperimentProfile(name);
+    const configDir = switchProfile.createVoidPersistentProfile(name);
     await ui.message(
       c.signal + 'Persist 프로필 생성됨' + c.RESET + '\n\n' +
       '  이름:  ' + c.text + name + c.RESET + '\n' +
@@ -1276,9 +1276,9 @@ async function experimentsCreateProfileFlow(switchProfile) {
 // lib/sessions.js의 세션 목록 패턴을 재사용하되, 다중 선택을 위해 pool 포함
 // 여부를 desc에 표시하고 매 선택마다 토글한다(체크박스 없는 이 메뉴 프레임워크
 // 안에서 가장 단순한 다중 선택 흉내).
-async function experimentsPoolMenu(switchProfile) {
+async function voidPersistentPoolMenu(switchProfile) {
   while (true) {
-    const state = configDb.getExperimentSwitcher();
+    const state = configDb.getVoidPersistentSwitcher();
     const eligible = switchProfile.eligibleSessions();
     if (eligible.length === 0) {
       await ui.message(
@@ -1296,7 +1296,7 @@ async function experimentsPoolMenu(switchProfile) {
     const s = eligible[Number(sel.key) - 1];
     if (!s) continue;
     const toolCommand = s.toolCommand || 'claude';
-    const fresh = configDb.getExperimentSwitcher();
+    const fresh = configDb.getVoidPersistentSwitcher();
     const idx = fresh.pool.findIndex(m => m.name === s.name && (m.toolCommand || 'claude') === toolCommand);
     if (idx >= 0) {
       switchProfile.removePoolMember(idx);
@@ -1307,39 +1307,39 @@ async function experimentsPoolMenu(switchProfile) {
   }
 }
 
-async function experimentsLaunch(switchProfile) {
+async function voidPersistentLaunch(switchProfile) {
   const tool = config.tools.find(t => (t.command || '').toLowerCase() === 'claude');
   if (!tool) {
     await ui.message('claude 도구가 설정되어 있지 않습니다.');
     return;
   }
-  const result = await switchProfile.runExperimentSession(tool, c, config);
+  const result = await switchProfile.runVoidPersistentSession(tool, c, config);
   if (!result || !result.ok) {
     await ui.message(c.warn + String((result && result.error) || '알 수 없는 오류') + c.RESET);
   }
 }
 
-async function experimentsMenu() {
+async function voidPersistentMenu() {
   let switchProfile;
   try {
-    switchProfile = require('./lib/experiments/switchProfile');
+    switchProfile = require('./lib/void-persistent/switchProfile');
   } catch (err) {
     await ui.message(
-      c.warn + '실험 모듈을 불러올 수 없습니다.' + c.RESET + '\n\n' +
+      c.warn + 'void-persistent 모듈을 불러올 수 없습니다.' + c.RESET + '\n\n' +
       '  ' + c.muted2 + String(err && err.message || err) + c.RESET
     );
     return;
   }
   if (!switchProfile.isAvailable()) {
     await ui.message(
-      c.warn + '이 환경에서는 계정 전환 실험 기능을 사용할 수 없습니다.' + c.RESET + '\n\n' +
+      c.warn + '이 환경에서는 계정 전환(void-persistent) 기능을 사용할 수 없습니다.' + c.RESET + '\n\n' +
       c.muted2 + '  node-pty / @xterm/headless 가 필요합니다.' + c.RESET
     );
     return;
   }
 
   while (true) {
-    const state = configDb.getExperimentSwitcher();
+    const state = configDb.getVoidPersistentSwitcher();
     const activeName = state.activePoolIndex >= 0 && state.pool[state.activePoolIndex]
       ? state.pool[state.activePoolIndex].name : '없음';
     const items = [
@@ -1358,13 +1358,13 @@ async function experimentsMenu() {
       },
     ];
 
-    const sel = await ui.menu('Experiments — 계정 자동 전환 (실험적, 수동 전환만 지원)', items, { back: true });
+    const sel = await ui.menu('void-persistent — 계정 자동 전환 (수동 전환만 지원)', items, { back: true });
     if (!sel) return;
 
     switch (sel.key) {
-      case '1': await experimentsCreateProfileFlow(switchProfile); break;
-      case '2': await experimentsPoolMenu(switchProfile); break;
-      case '3': await experimentsLaunch(switchProfile); break;
+      case '1': await voidPersistentCreateProfileFlow(switchProfile); break;
+      case '2': await voidPersistentPoolMenu(switchProfile); break;
+      case '3': await voidPersistentLaunch(switchProfile); break;
     }
   }
 }
@@ -1375,10 +1375,10 @@ async function showAdvancedMenu(toolNames, tokenOpts, sessionOpts, hasTokens, ha
     { key: '1', label: '익명 모드', options: toolNames },
     { key: '2', label: '세션 실행', desc: '도구 선택 후 세션 선택', disabled: !hasSessions },
   ];
-  // EXPERIMENTAL: 가용성 게이트를 통과했을 때만 노출 — 실패해도 나머지
-  // 고급 메뉴는 그대로 동작한다(defensive require, 위 experimentsAvailable 참고).
-  if (experimentsAvailable()) {
-    items.push({ key: 'E', label: 'Experiments', desc: '계정 자동 전환 (실험적)' });
+  // void-persistent: 가용성 게이트를 통과했을 때만 노출 — 실패해도 나머지
+  // 고급 메뉴는 그대로 동작한다(defensive require, 위 voidPersistentAvailable 참고).
+  if (voidPersistentAvailable()) {
+    items.push({ key: 'E', label: 'void-persistent', desc: '계정 자동 전환' });
   }
 
   while (true) {
@@ -1400,7 +1400,7 @@ async function showAdvancedMenu(toolNames, tokenOpts, sessionOpts, hasTokens, ha
         break;
       }
       case 'E': {
-        await experimentsMenu();
+        await voidPersistentMenu();
         break;
       }
     }
