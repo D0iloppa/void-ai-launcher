@@ -274,6 +274,14 @@ function autoRecordVoidContextExit(sessionName) {
   }
 }
 
+// 터미널 창/탭 타이틀을 OSC 로 설정한다. void 는 자식 CLI 출력을 @xterm/headless
+// 로 흡수해 프레임에 재렌더하므로 자식(claude 등)의 타이틀 시퀀스가 실제 터미널에
+// 닿지 않는다 — 따라서 여기서 쓴 타이틀이 세션 내내 유지된다. 여러 탭이 모두
+// "void" 로만 보여 구분이 안 되던 문제 해결(예: void-claude[wellconn]).
+function setTermTitle(title) {
+  try { process.stdout.write(`\x1b]0;${title}\x07`); } catch {}
+}
+
 // mode: false = 일반 | 'anon' = 익명 | string = 세션명
 async function launchTool(tool, mode, extraArgs = []) {
   const isAnon = mode === 'anon';
@@ -282,6 +290,11 @@ async function launchTool(tool, mode, extraArgs = []) {
   const sessionToolCommand = session ? session.toolCommand : null;
   saveLast({ toolName: tool.name, isAnon, sessionName, sessionToolCommand, extraArgs });
   appendHistory({ toolName: tool.name, isAnon, sessionName, sessionToolCommand, extraArgs });
+
+  // 탭 구분용 타이틀: void-<cli>[<session>] (익명은 [anon], 일반은 접미사 없음).
+  const titleCli = sessionToolCommand || tool.command || tool.name;
+  const titleSuffix = sessionName ? `[${sessionName}]` : (isAnon ? '[anon]' : '');
+  setTermTitle(`void-${titleCli}${titleSuffix}`);
 
   if (sessionName) {
     autoRecordVoidContextLaunch(sessionName, sessionToolCommand || tool.command);
@@ -292,6 +305,7 @@ async function launchTool(tool, mode, extraArgs = []) {
   if (sessionName) {
     autoRecordVoidContextExit(sessionName);
   }
+  setTermTitle('void');
 }
 
 // ── args 직행 ─────────────────────────────────────────────
@@ -653,6 +667,7 @@ async function showSettingsMenu(topRows) {
       { key: '7', label: '사용량 조회', desc: 'Claude/Codex 사용량 확인' },
       { key: '8', label: '세션 동기화', desc: '다른 기기와 네임드 세션을 WebSocket으로 동기화' },
       { key: '9', label: '업데이트 확인/적용', desc: 'git 기반 자동 업데이트 확인 및 적용' },
+      { key: 'r', label: '재시작 (reboot)', desc: 'git 업데이트 없이 현재 로컬 코드로 프로세스 재기동' },
     ];
 
     const sel = await ui.menu('설정 및 이력', items, { back: true, topRows });
@@ -676,6 +691,8 @@ async function showSettingsMenu(topRows) {
       await require('./lib/sync').syncMenu(config, c);
     } else if (sel.key === '9') {
       await showUpdateMenu();
+    } else if (sel.key === 'r') {
+      await showReboot();
     }
   }
 }
@@ -734,6 +751,24 @@ async function showUpdateMenu() {
   );
 
   // --sudo 재실행(상단 49-59행)과 동일한 발상의 clean teardown + 재기동.
+  ui.exitAltScreen();
+  ui.showCursor();
+  const { spawnSync: _sx } = require('child_process');
+  const res = _sx(process.execPath, [__filename], { stdio: 'inherit' });
+  process.exit(res.status ?? 0);
+}
+
+// 설정 → 재시작(reboot). git 업데이트 없이 현재 launcher.js 프로세스만 그대로
+// 재실행한다 — 로컬 개발 환경처럼 코드가 항상 최신이라 업데이트 체크가 무의미할
+// 때, 메모리에 로드된 구 코드를 디스크의 새 로컬 코드로 리로드하는 용도.
+// showUpdateMenu 의 재기동 로직과 동일하되 git(check/apply) 단계를 뺀다.
+async function showReboot() {
+  const confirmSel = await ui.menu('재시작 (reboot) — 현재 로컬 코드로 즉시 재기동', [
+    { key: '1', label: '예', desc: '지금 재시작' },
+    { key: '2', label: '아니오' },
+  ], { back: true });
+  if (!confirmSel || confirmSel.key !== '1') return;
+
   ui.exitAltScreen();
   ui.showCursor();
   const { spawnSync: _sx } = require('child_process');
@@ -919,6 +954,19 @@ async function showAssistantChat(assistant, profile) {
 
   assistant.refreshOnboardStatus(profile);
 
+  // 펫 vitals — 레거시 프로필(profile.pet 없음)은 defaultVitals 로 백필하고,
+  // 있으면 updated_at 기준 lazy decay 를 반영한 뒤 저장한다(서버 오브 트루스는
+  // 이 lazy decay 뿐 — 백그라운드 타이머로 깎지 않는다). 손상된 pet 블록이
+  // 채팅 진입 자체를 막으면 안 되므로 통째로 fail-open.
+  const petLib = require('./lib/pet');
+  const { saveAssistant } = require('./lib/storage');
+  try {
+    if (!profile.pet) profile.pet = { skinId: 'space-invader', vitals: petLib.defaultVitals() };
+    if (!profile.pet.skinId) profile.pet.skinId = 'space-invader';
+    profile.pet.vitals = petLib.applyDecay(profile.pet.vitals);
+    saveAssistant(profile);
+  } catch {}
+
   const attach = (s) => {
     s.on('delta', chunk => view.appendDelta(chunk));
     s.on('meta', meta => {
@@ -950,6 +998,17 @@ async function showAssistantChat(assistant, profile) {
     tokenAlias: profile.tokenAlias,
     model: profile.model,
     effort: profile.effort,
+    skinId: profile.pet && profile.pet.skinId,
+    petVitals: profile.pet && profile.pet.vitals,
+    onPetInteract(kind) {
+      try {
+        profile.pet.vitals = petLib.interact(profile.pet.vitals, kind);
+        saveAssistant(profile);
+        return profile.pet.vitals;
+      } catch {
+        return null;
+      }
+    },
     async onTokenChange(picked) {
       profile.tokenService = picked.service;
       profile.tokenAlias = picked.alias;
@@ -1041,6 +1100,10 @@ async function assistantDetailMenu(assistant, profile) {
       key: '4', label: '모델/추론 설정',
       desc: `${profile.model || 'default'} / ${profile.effort || 'default'}`,
     });
+    items.push({
+      key: '5', label: '펫 스킨 선택',
+      desc: (profile.pet && profile.pet.skinId) || 'space-invader',
+    });
 
     const sel = await ui.menu(`어시스턴트: ${profile.name}`, items, { back: true });
     if (!sel) return;
@@ -1073,6 +1136,25 @@ async function assistantDetailMenu(assistant, profile) {
 
     if (sel.key === '4') {
       await assistantModelSettingsMenu(profile);
+      continue;
+    }
+
+    if (sel.key === '5') {
+      // skinId 는 페르소나 프로필의 명시적 필드다 — persona.md 텍스트에서 자동
+      // 유추하지 않는다(LOCKED DECISION). pickRegisteredToken 과 동일한 목록형
+      // 선택 패턴.
+      const petLib = require('./lib/pet');
+      const skinItems = petLib.listSkins().map((s, i) => ({ key: String(i + 1), label: s.label, desc: s.id }));
+      const skinSel = await ui.menu('펫 스킨 선택', skinItems, { back: true });
+      if (skinSel) {
+        const chosen = petLib.listSkins()[Number(skinSel.key) - 1];
+        if (chosen) {
+          if (!profile.pet) profile.pet = { vitals: petLib.defaultVitals() };
+          profile.pet.skinId = chosen.id;
+          saveAssistant(profile);
+          await ui.message(c.ok + `✓ 스킨 변경됨  ${chosen.label}` + c.RESET);
+        }
+      }
       continue;
     }
   }
