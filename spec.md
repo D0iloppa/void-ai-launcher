@@ -33,9 +33,8 @@ void-ai-launcher/
 │                              #   cross-platform-roadmap, guideline, windows_porting_guide, codex-launch-issue
 ├── test/                     # node --test 스위트 (assistant-sandbox, messaging-store, pet,
 │                              #   resumeFork, selfUpdate, sync-ssh, void-context(-auto-record), xtermFrame-mail-restart)
-├── _global/g_skills/         # 전역 스킬 저장소 — cmd_generator.js가 네임드 세션에, assistant.js가
-│                              #   어시스턴트 프로필에 각각 심볼릭 링크로 연결
-└── ref/orca                  # 참고용 서브모듈(설계 리서치 자료, 런타임 의존성 아님)
+└── _global/g_skills/         # 전역 스킬 저장소 — cmd_generator.js가 네임드 세션에, assistant.js가
+                               #   어시스턴트 프로필에 각각 심볼릭 링크로 연결
 ```
 
 ## 2. 모듈 책임 표 (`lib/` 전체)
@@ -58,7 +57,7 @@ CLAUDE.md의 표에 이미 있는 모듈(`runner.js`, `wrapper.js`, `ui.js`, `se
 | `lib/xtermFrame.js` | `@xterm/headless` + `node-pty` 기반 크로스플랫폼 프레임 컴포지터(`runXtermWrapped`) — 자식 PTY 출력을 진짜 VT 파서로 읽어 void의 border/status bar chrome과 합성해 다시 그린다. 컨트롤 패널(Ctrl+\\)에서 도움말/사용량/void-persistent 계정전환(S)/메시징(M) 오버레이를 모두 이 파일이 그린다. **모든 OS에서 1순위로 시도되는 현재의 기본 wrapper 경로**(2026-07 기준, `lib/runner.js`) — 사전 존재하는 파일이라 이번 문서화 작업에서 수정하지 않음 |
 | `lib/void-persistent/switchProfile.js` | phase1(수동 계정 전환) 핵심 로직 — pool CRUD, 자격증명 파일(`.credentials.json`/`.claude.json`) 원자적 스왑+롤백(`switchTo`), 세션 캡처, `runVoidPersistentSession` 실행 루프 |
 | `lib/void-persistent/autoSwitchDriver.js` | phase2(자동 전환) glue — `autoSwitchEngine`(순수 상태머신) + `localLogTier`(로컬 로그 스캔)를 실제 configDb 상태에 연결. `usageWarmup.js`의 백그라운드 폴러에서 호출되며 TTY/PTY는 건드리지 않고 `pendingRestart` 플래그만 남긴다 |
-| `lib/void-persistent/autoSwitchEngine.js` | phase2 순수 상태머신(fs/pty/network 미의존) — rate-limit hit/주기 tick에 따라 `switchTo`/`none`/`allExhausted` 결정을 반환. `ref/mobius`의 Swift `AutoSwitchEngine`을 그대로 포팅 |
+| `lib/void-persistent/autoSwitchEngine.js` | phase2 순수 상태머신(fs/pty/network 미의존) — rate-limit hit/주기 tick에 따라 `switchTo`/`none`/`allExhausted` 결정을 반환(외부 Swift 참고 구현을 그대로 포팅) |
 | `lib/void-persistent/localLogTier.js` | phase3(제로-네트워크 사용량 로컬 로그 tier) — Claude CLI 자체 세션 `*.jsonl`에서 rate-limit 이벤트를 파싱해 리셋 시각을 추출. `usageMeter.js`의 tier-0로 배선되어 있어 API/PTY 부하를 줄이기만 한다 |
 | `lib/messaging/registry.js` | void-to-void 프레즌스 레지스트리 — 실행 중인 void 프로세스가 `storageDir()/mail/registry/`에 자기 자신을 등록(파일시스템 전용, dJinn/네트워크 불필요), pid 생존 여부로 stale 항목 정리 |
 | `lib/messaging/mailbox.js` | 메시징 공개 API(하위호환 유지) — 내부 저장소가 파일 스풀에서 dJinn 그래프(`store.js`)로 전환됐지만 함수 시그니처는 그대로. `listInbox`가 돌려주는 `file` 필드는 이제 파일 경로가 아니라 opaque handle |
@@ -150,7 +149,6 @@ configDir은 절대 변형하지 않음).
 | `vendor/dJinn` | `@d0iloppa/djinn` — better-sqlite3 기반 그래프 DB 엔진. 모든 `*.djinn.db` 저장소의 백엔드. **필수**(`scripts/install-djinn.js`가 preinstall에서 커밋된 vendor tgz 우선 설치, 실패 시 서브모듈 자체 빌드로 폴백) |
 | `vendor/void-assistant` | 상주 `claude`/`codex` 세션 엔진(5절 참고) — Personal Assistant 채팅이 이 패키지의 `createSession()`을 구동 |
 | `vendor/tmux-windows` | Windows용 tmux 바이너리 확보 경로(winget 우선, 실패 시 이 서브모듈에 pin된 릴리즈에서 `tmux.exe` 다운로드) — `lib/sessions.js`의 터미널 세션 메뉴가 Windows에서도 동작하게 함 |
-| `ref/orca` | 설계 리서치 참고용(런타임 의존성 아님) |
 
 ## 5. 핵심 프로토콜/인터페이스
 
