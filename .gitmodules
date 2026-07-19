@@ -9,4 +9,4 @@
 	url = https://github.com/D0iloppa/dJinn.git
 [submodule "vendor/void-assistant"]
 	path = vendor/void-assistant
-	url = /mnt/c/DEV/void-assistant
+	url = https://github.com/D0iloppa/void-assistant.git
