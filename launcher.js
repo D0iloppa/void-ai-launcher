@@ -58,6 +58,17 @@ if (argv.includes('--sudo')) {
   argv.splice(argv.indexOf('--sudo'), 1);
 }
 
+// ── void-to-void 메시징: 실행 중인 void 프로세스 registry ──
+// 시작 시 자기 자신을 registry 에 등록하고, 죽은 프로세스의 흔적을 정리한다.
+// require 자체가 실패하거나 (모듈 누락 등) 파일시스템 문제가 있어도 launch 를
+// 절대 막아서는 안 되므로 전체를 try/catch 로 감싼다.
+try {
+  const messagingRegistry = require('./lib/messaging/registry');
+  messagingRegistry.registerSelf();
+  messagingRegistry.pruneRegistry();
+  messagingRegistry.hookExit();
+} catch {}
+
 // ── 유틸 ─────────────────────────────────────────────────
 
 function timeSince(ts) {
@@ -1088,12 +1099,145 @@ async function showAssistantMenu() {
   }
 }
 
+// EXPERIMENTAL — phase 1(수동 계정 전환)만 구현됨. lib/experiments/switchProfile.js
+// 가 없거나(node-pty/@xterm/headless 미가용) require 가 실패하면 메뉴 아이템
+// 자체를 숨긴다 — 나머지 고급 메뉴 동작은 전혀 건드리지 않는다.
+function experimentsAvailable() {
+  try {
+    return require('./lib/experiments/switchProfile').isAvailable();
+  } catch {
+    return false;
+  }
+}
+
+async function experimentsCreateProfileFlow(switchProfile) {
+  const rawName = await ui.input('Persist 프로필 이름 (영문/숫자/-): ');
+  if (rawName === null) return;
+  const name = rawName.trim();
+  if (!name || !/^[a-zA-Z0-9][a-zA-Z0-9-]*$/.test(name)) {
+    await ui.message('유효하지 않은 이름입니다.\n\n' + c.muted2 + '  영문/숫자/-만 사용, 영문 또는 숫자로 시작' + c.RESET);
+    return;
+  }
+  try {
+    const configDir = switchProfile.createExperimentProfile(name);
+    await ui.message(
+      c.signal + 'Persist 프로필 생성됨' + c.RESET + '\n\n' +
+      '  이름:  ' + c.text + name + c.RESET + '\n' +
+      '  경로:  ' + c.muted2 + configDir + c.RESET + '\n\n' +
+      c.muted + '  다음: Pool 관리에서 전환할 계정(CLI 세션)을 추가하세요.' + c.RESET
+    );
+  } catch (err) {
+    await ui.message(c.warn + String(err && err.message || err) + c.RESET);
+  }
+}
+
+// lib/sessions.js의 세션 목록 패턴을 재사용하되, 다중 선택을 위해 pool 포함
+// 여부를 desc에 표시하고 매 선택마다 토글한다(체크박스 없는 이 메뉴 프레임워크
+// 안에서 가장 단순한 다중 선택 흉내).
+async function experimentsPoolMenu(switchProfile) {
+  while (true) {
+    const state = configDb.getExperimentSwitcher();
+    const eligible = switchProfile.eligibleSessions();
+    if (eligible.length === 0) {
+      await ui.message(
+        '전환에 사용할 claude 세션이 없습니다.\n\n' +
+        c.muted2 + '  먼저 \'LLM CLI 세션관리\'에서 claude 세션을 만드세요.' + c.RESET
+      );
+      return;
+    }
+    const items = eligible.map((s, i) => {
+      const inPool = state.pool.some(m => m.name === s.name && (m.toolCommand || 'claude') === (s.toolCommand || 'claude'));
+      return { key: String(i + 1), label: s.name, desc: inPool ? c.ok + '✓ pool 포함됨' + c.RESET : '포함 안 됨' };
+    });
+    const sel = await ui.menu('Pool 관리 — 선택하여 토글', items, { back: true });
+    if (!sel) return;
+    const s = eligible[Number(sel.key) - 1];
+    if (!s) continue;
+    const toolCommand = s.toolCommand || 'claude';
+    const fresh = configDb.getExperimentSwitcher();
+    const idx = fresh.pool.findIndex(m => m.name === s.name && (m.toolCommand || 'claude') === toolCommand);
+    if (idx >= 0) {
+      switchProfile.removePoolMember(idx);
+    } else {
+      const r = switchProfile.addPoolMember(s.name, toolCommand);
+      if (!r.ok) await ui.message(c.warn + r.error + c.RESET);
+    }
+  }
+}
+
+async function experimentsLaunch(switchProfile) {
+  const tool = config.tools.find(t => (t.command || '').toLowerCase() === 'claude');
+  if (!tool) {
+    await ui.message('claude 도구가 설정되어 있지 않습니다.');
+    return;
+  }
+  const result = await switchProfile.runExperimentSession(tool, c, config);
+  if (!result || !result.ok) {
+    await ui.message(c.warn + String((result && result.error) || '알 수 없는 오류') + c.RESET);
+  }
+}
+
+async function experimentsMenu() {
+  let switchProfile;
+  try {
+    switchProfile = require('./lib/experiments/switchProfile');
+  } catch (err) {
+    await ui.message(
+      c.warn + '실험 모듈을 불러올 수 없습니다.' + c.RESET + '\n\n' +
+      '  ' + c.muted2 + String(err && err.message || err) + c.RESET
+    );
+    return;
+  }
+  if (!switchProfile.isAvailable()) {
+    await ui.message(
+      c.warn + '이 환경에서는 계정 전환 실험 기능을 사용할 수 없습니다.' + c.RESET + '\n\n' +
+      c.muted2 + '  node-pty / @xterm/headless 가 필요합니다.' + c.RESET
+    );
+    return;
+  }
+
+  while (true) {
+    const state = configDb.getExperimentSwitcher();
+    const activeName = state.activePoolIndex >= 0 && state.pool[state.activePoolIndex]
+      ? state.pool[state.activePoolIndex].name : '없음';
+    const items = [
+      {
+        key: '1', label: state.persistDir ? 'Persist 프로필 재설정' : 'Persist 프로필 생성',
+        desc: state.persistDir || '아직 생성되지 않음',
+      },
+      {
+        key: '2', label: 'Pool 관리', desc: `${state.pool.length}개 계정 등록됨`,
+        disabled: !state.persistDir,
+      },
+      {
+        key: '3', label: '실행 (계정 전환 세션 시작)',
+        desc: state.pool.length > 0 ? `활성: ${activeName}` : '먼저 Pool에 계정을 추가하세요',
+        disabled: !state.persistDir || state.pool.length === 0,
+      },
+    ];
+
+    const sel = await ui.menu('Experiments — 계정 자동 전환 (실험적, 수동 전환만 지원)', items, { back: true });
+    if (!sel) return;
+
+    switch (sel.key) {
+      case '1': await experimentsCreateProfileFlow(switchProfile); break;
+      case '2': await experimentsPoolMenu(switchProfile); break;
+      case '3': await experimentsLaunch(switchProfile); break;
+    }
+  }
+}
+
 async function showAdvancedMenu(toolNames, tokenOpts, sessionOpts, hasTokens, hasSessions, topRows) {
   const items = [
     { key: 'A', label: 'Personal Assistant', desc: '상주 AI 어시스턴트 프로필 관리 및 채팅' },
     { key: '1', label: '익명 모드', options: toolNames },
     { key: '2', label: '세션 실행', desc: '도구 선택 후 세션 선택', disabled: !hasSessions },
   ];
+  // EXPERIMENTAL: 가용성 게이트를 통과했을 때만 노출 — 실패해도 나머지
+  // 고급 메뉴는 그대로 동작한다(defensive require, 위 experimentsAvailable 참고).
+  if (experimentsAvailable()) {
+    items.push({ key: 'E', label: 'Experiments', desc: '계정 자동 전환 (실험적)' });
+  }
 
   while (true) {
     const sel = await ui.menu('고급 모드', items, { back: true, topRows });
@@ -1111,6 +1255,10 @@ async function showAdvancedMenu(toolNames, tokenOpts, sessionOpts, hasTokens, ha
       }
       case '2': {
         await showSessionLaunchMenu();
+        break;
+      }
+      case 'E': {
+        await experimentsMenu();
         break;
       }
     }
