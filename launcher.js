@@ -240,6 +240,40 @@ function printHelp() {
   process.stdout.write(getHelpText() + '\n');
 }
 
+// void-context 자동 기록 — named session 실행(launch)에서만 동작한다. 일반/익명 실행은
+// 절대 건드리지 않는다. 완전 fail-open: void-context/dJinn 이 없거나 어떤 이유로든 예외를
+// 던지면 이 함수는 그냥 조용히 아무 일도 하지 않은 것처럼 리턴한다 — 실행(launch) 흐름에는
+// 절대 영향을 주지 않는다(HARD INVARIANT). lib/voidContext.js 는 "노출 전용" 설계상 provider
+// 가 PROVIDERS={anthropic,openai,google} 밖이면 putContext 가 throw 하므로, agy 처럼 매핑
+// 불가능한 toolCommand 는 lib/voidContextAutoRecord.js#computeContextUpdate 가 null 을 반환해
+// putContext 호출 자체를 건너뛴다(순수 판단 로직은 그 파일에 있고, 여기서는 실제 그래프 I/O +
+// 에러 스월로우만 담당한다).
+function autoRecordVoidContextLaunch(sessionName, toolCommand) {
+  try {
+    const voidContext = require('./lib/voidContext');
+    const { computeContextUpdate } = require('./lib/voidContextAutoRecord');
+    voidContext.initVoidContext();
+    const existingContext = voidContext.getContext(sessionName);
+    const update = computeContextUpdate({ toolCommand, existingContext, sessionName, workspace: process.cwd() });
+    if (update) voidContext.putContext(update);
+  } catch {
+    // fail-open: void-context 기록 실패는 launch 에 아무 영향도 주지 않는다.
+  }
+}
+
+// 세션 종료 시각을 task_context 엔트리로 남기는 선택적 마커. launch 시점에 기록되지 않은
+// 세션(provider 미매핑 등으로 컨텍스트 노드 자체가 없는 경우)이면 조용히 건너뛴다. runTool
+// 이 이미 끝난 뒤 호출되므로 종료 흐름을 지연/차단하지 않으며, 여기서도 완전 fail-open.
+function autoRecordVoidContextExit(sessionName) {
+  try {
+    const voidContext = require('./lib/voidContext');
+    if (!voidContext.getContext(sessionName)) return;
+    voidContext.putTaskContext(sessionName, undefined, { event: 'exit', at: new Date().toISOString() });
+  } catch {
+    // fail-open: 종료 마커 기록 실패도 절대 표면화하지 않는다.
+  }
+}
+
 // mode: false = 일반 | 'anon' = 익명 | string = 세션명
 async function launchTool(tool, mode, extraArgs = []) {
   const isAnon = mode === 'anon';
@@ -248,7 +282,16 @@ async function launchTool(tool, mode, extraArgs = []) {
   const sessionToolCommand = session ? session.toolCommand : null;
   saveLast({ toolName: tool.name, isAnon, sessionName, sessionToolCommand, extraArgs });
   appendHistory({ toolName: tool.name, isAnon, sessionName, sessionToolCommand, extraArgs });
+
+  if (sessionName) {
+    autoRecordVoidContextLaunch(sessionName, sessionToolCommand || tool.command);
+  }
+
   await runTool(tool, mode, c, config, extraArgs);
+
+  if (sessionName) {
+    autoRecordVoidContextExit(sessionName);
+  }
 }
 
 // ── args 직행 ─────────────────────────────────────────────
