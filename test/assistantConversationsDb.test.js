@@ -99,3 +99,59 @@ test('getConversations/upsertConversation: isolated per profile', () => {
 test('getConversations: unknown profile returns an empty array', () => {
   assert.deepEqual(convDb.getConversations('never-seen-conv-' + process.pid), []);
 });
+
+// ── applyDelete: pure logic, no DB involved ─────────────────────────────
+
+test('applyDelete: removes the matching sessionId', () => {
+  const list = [
+    { sessionId: 's1', title: 'a', startedAt: 1, lastAt: 1 },
+    { sessionId: 's2', title: 'b', startedAt: 2, lastAt: 2 },
+  ];
+  const next = convDb.applyDelete(list, 's1');
+  assert.deepEqual(next.map(e => e.sessionId), ['s2']);
+});
+
+test('applyDelete: sessionId not present is a no-op (same entries, new array)', () => {
+  const list = [{ sessionId: 's1', title: 'a', startedAt: 1, lastAt: 1 }];
+  const next = convDb.applyDelete(list, 'does-not-exist');
+  assert.deepEqual(next, list);
+  assert.notEqual(next, list); // new array instance, not the same reference
+});
+
+test('applyDelete: missing sessionId argument is a no-op', () => {
+  const list = [{ sessionId: 's1', title: 'a', startedAt: 1, lastAt: 1 }];
+  assert.deepEqual(convDb.applyDelete(list, undefined), list);
+});
+
+test('applyDelete: empty/non-array list returns an empty array', () => {
+  assert.deepEqual(convDb.applyDelete(null, 's1'), []);
+  assert.deepEqual(convDb.applyDelete(undefined, 's1'), []);
+});
+
+// ── deleteConversation: real dJinn round-trip ───────────────────────────
+
+test('deleteConversation: removes the entry from the persisted list', () => {
+  const profile = 'conv-profile-delete-' + process.pid;
+  convDb.upsertConversation(profile, { sessionId: 'd1', title: 'keep', startedAt: 1, lastAt: 1 });
+  convDb.upsertConversation(profile, { sessionId: 'd2', title: 'remove me', startedAt: 2, lastAt: 2 });
+
+  convDb.deleteConversation(profile, 'd2');
+
+  const list = convDb.getConversations(profile);
+  assert.deepEqual(list.map(e => e.sessionId), ['d1']);
+});
+
+test('deleteConversation: no-op when sessionId is absent from the list', () => {
+  const profile = 'conv-profile-delete-noop-' + process.pid;
+  convDb.upsertConversation(profile, { sessionId: 'e1', title: 'a', startedAt: 1, lastAt: 1 });
+
+  convDb.deleteConversation(profile, 'never-existed');
+
+  const list = convDb.getConversations(profile);
+  assert.deepEqual(list.map(e => e.sessionId), ['e1']);
+});
+
+test('deleteConversation: missing profileName/sessionId does not throw', () => {
+  assert.doesNotThrow(() => convDb.deleteConversation(null, 'x'));
+  assert.doesNotThrow(() => convDb.deleteConversation('some-profile', null));
+});

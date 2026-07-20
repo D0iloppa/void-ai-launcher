@@ -180,3 +180,76 @@ test('wrapCols: preserves a bold span across a wrapped line boundary without lea
   // and the visible text (ANSI stripped) reassembles to the original words
   assert.equal(stripAnsi(lines.join('')), 'a bbbbbbbbbb c');
 });
+
+// ── renderChatBody (fenced ``` code blocks, block-aware layer on top of
+// renderInlineMarkdown/wrapCols) ─────────────────────────────────────────
+
+test('renderChatBody: a message with no fence is byte-identical to the old wrapCols(renderInlineMarkdown(...)) call', () => {
+  const body = 'plain **bold** and `code` reply\nsecond line, no fences here';
+  const before = ui.wrapCols(ui.renderInlineMarkdown(body), 30);
+  const after = ui.renderChatBody(body, 30);
+  assert.deepEqual(after, before);
+});
+
+test('renderChatBody: a fenced ```python block has its fences removed, code lines gutter-styled, and NO bold applied inside', () => {
+  const body = 'before text\n```python\ndef f(x):\n    return **x**\n```\nafter text';
+  const lines = ui.renderChatBody(body, 40);
+  const joinedPlain = stripAnsi(lines.join('\n'));
+  // fences themselves must never appear in the rendered output
+  assert.ok(!joinedPlain.includes('```'), 'fence markers must be stripped');
+  // code content survives verbatim, including the literal (unrendered) "**x**"
+  assert.ok(joinedPlain.includes('def f(x):'));
+  assert.ok(joinedPlain.includes('return **x**'), 'markdown inside a code block must not be interpreted');
+  // and no BOLD escape was emitted anywhere near the code line (the only
+  // ** in the whole message is inside the fence)
+  assert.ok(!lines.some(l => l.includes(colors.BOLD)), 'inline markdown must not run inside a fenced code block');
+  // the code lines carry the dim/gutter code-line color
+  assert.ok(lines.some(l => l.includes(colors.DIM) && l.includes('│')), 'expected a gutter-styled code line');
+});
+
+test('renderChatBody: text surrounding a fenced block still gets inline markdown rendered', () => {
+  const body = '**before** text\n```\ncode line\n```\n**after** text';
+  const lines = ui.renderChatBody(body, 40);
+  const joined = lines.join('\n');
+  // both bold spans outside the fence render styled...
+  assert.ok(joined.includes(colors.BOLD + 'before' + colors.RESET));
+  assert.ok(joined.includes(colors.BOLD + 'after' + colors.RESET));
+  // ...while the fence markers are gone and the code line is untouched.
+  assert.ok(!stripAnsi(joined).includes('```'));
+  assert.ok(stripAnsi(joined).includes('code line'));
+});
+
+test('renderChatBody: an unclosed (still-streaming) fence renders as a code block without throwing or leaking styling', () => {
+  const body = 'reply so far\n```js\nconst x = 1;\nconst y ';
+  assert.doesNotThrow(() => ui.renderChatBody(body, 40));
+  const lines = ui.renderChatBody(body, 40);
+  const plain = stripAnsi(lines.join('\n'));
+  assert.ok(!plain.includes('```'));
+  assert.ok(plain.includes('const x = 1;'));
+  assert.ok(plain.includes('const y'));
+  // every emitted line must close its own SGR state (never bleed into
+  // whatever the avatar panel/next box renders right after it)
+  for (const line of lines) {
+    if (/\x1b\[/.test(line)) assert.ok(line.endsWith(colors.RESET), `line "${line}" does not end with RESET`);
+  }
+});
+
+test('renderChatBody: a lone unclosed ``` with no content after it degrades sanely (no throw, no leaked styling)', () => {
+  const body = 'just some text\n```';
+  assert.doesNotThrow(() => ui.renderChatBody(body, 40));
+  const lines = ui.renderChatBody(body, 40);
+  for (const line of lines) {
+    if (/\x1b\[/.test(line)) assert.ok(line.endsWith(colors.RESET));
+  }
+});
+
+test('renderChatBody: CJK inside a fenced code block keeps correct colWidth (no overflow past the requested width)', () => {
+  const body = '```\n한글코드라인입니다한글코드라인입니다한글코드라인입니다\n```';
+  const width = 20;
+  const lines = ui.renderChatBody(body, width);
+  for (const line of lines) {
+    assert.ok(ui.colWidth(line) <= width, `line exceeds requested width: colWidth=${ui.colWidth(line)}`);
+  }
+  // and the CJK text itself survived the wrap (nothing dropped)
+  assert.ok(stripAnsi(lines.join('')).includes('한글코드라인입니다'));
+});

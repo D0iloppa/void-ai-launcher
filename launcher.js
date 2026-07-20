@@ -1003,7 +1003,7 @@ async function showAssistantChat(assistant, profile) {
   const attach = (s) => {
     s.on('delta', chunk => view.appendDelta(chunk));
     s.on('tool', evt => view.appendToolEvent(evt));
-    s.on('thinking', text => view.appendThinking(text));
+    s.on('thinking', text => view.setLiveThinking(text));
     s.on('meta', meta => {
       lastSessionMeta = meta;
       view.setSessionMeta(meta);
@@ -1137,20 +1137,53 @@ async function showAssistantChat(assistant, profile) {
     // fail-open으로 계속 진행한다.
     async onLoadConversation() {
       const convDb = require('./lib/assistantConversationsDb');
-      const list = convDb.getConversations(profile.name);
-      if (list.length === 0) {
-        view.appendSystem('저장된 이전 대화가 없습니다.');
-        return;
-      }
+      const assistantTranscript = require('./lib/assistantTranscript');
 
-      const items = list.map((conv, i) => ({
-        key: String(i + 1),
-        label: conv.title || '새 대화',
-        desc: fmtConversationTime(conv.lastAt || conv.startedAt),
-      }));
-      const sel = await ui.menu('이전 대화', items, { back: true });
-      if (!sel) return;
-      const chosen = list[Number(sel.key) - 1];
+      // 목록 피커 — enableDelete: true 로 'd' 삭제를 켠다(개인비서 프로필
+      // 목록의 삭제 흐름과 같은 관례). 삭제 후에는 목록이 바뀌었으니 다시
+      // 조회해 같은 피커를 새로 띄운다(루프) — 지운 항목이 화면에서 사라진
+      // 걸 바로 보여주기 위함.
+      let chosen = null;
+      while (true) {
+        const list = convDb.getConversations(profile.name);
+        if (list.length === 0) {
+          view.appendSystem('저장된 이전 대화가 없습니다.');
+          return;
+        }
+
+        const items = list.map((conv, i) => ({
+          key: String(i + 1),
+          label: conv.title || '새 대화',
+          desc: fmtConversationTime(conv.lastAt || conv.startedAt),
+        }));
+        const sel = await ui.menu('이전 대화', items, { back: true, enableDelete: true });
+        if (!sel) return;
+
+        if (sel.action === 'delete') {
+          const target = list[Number(sel.key) - 1];
+          if (target) {
+            const confirmSel = await ui.menu(`대화 삭제: ${target.title || '새 대화'}`, [
+              { key: '1', label: '삭제', desc: '목록과 저장된 트랜스크립트를 함께 제거' },
+            ], { back: true });
+            if (confirmSel) {
+              // fail-open: 목록 삭제(dJinn)와 트랜스크립트 파일 삭제 둘 다
+              // 실패해도 채팅 화면 자체는 계속 쓸 수 있어야 한다 — deleteConversation
+              // 은 이미 내부적으로 fail-open, 여기 try/catch는 fs.unlinkSync/
+              // resolveTranscriptPath 실패(파일 없음 등)를 흡수한다.
+              try {
+                convDb.deleteConversation(profile.name, target.sessionId);
+                const workspaceDir = assistant.ensureAssistantWorkspace(profile.configDir);
+                const transcriptPath = assistantTranscript.resolveTranscriptPath(profile.configDir, workspaceDir, target.sessionId);
+                if (transcriptPath) fs.unlinkSync(transcriptPath);
+              } catch {}
+            }
+          }
+          continue;
+        }
+
+        chosen = list[Number(sel.key) - 1];
+        break;
+      }
       if (!chosen) return;
 
       if (session) {
@@ -1159,7 +1192,6 @@ async function showAssistantChat(assistant, profile) {
         lastAssistantSessionName = null;
       }
 
-      const assistantTranscript = require('./lib/assistantTranscript');
       let seeded = [];
       try {
         const workspaceDir = assistant.ensureAssistantWorkspace(profile.configDir);
@@ -1202,14 +1234,14 @@ async function showAssistantChat(assistant, profile) {
       profile.reasoning = next.reasoning !== false;
       require('./lib/storage').saveAssistant(profile);
 
-      if (restart) {
-        if (session) {
-          try { session.stop(); } catch {}
-          session = null;
-          lastAssistantSessionName = null;
-        }
-        view.appendSystem('설정 변경 — 다음 메시지부터 적용됩니다.');
+      if (restart && session) {
+        try { session.stop(); } catch {}
+        session = null;
+        lastAssistantSessionName = null;
       }
+      // 변경 안내는 대화창에 append 하지 않는다(지저분함) — restart 여부만
+      // 돌려주면 뷰가 컨트롤 패널 안에서만 "다음 메시지부터 적용"을 표시한다.
+      return restart;
     },
     onSubmit(text) {
       // '/'-슬래시 명령 인터셉터 — lib/assistantCommands.js 의 레지스트리에서
