@@ -22,6 +22,7 @@ const {
 } = require('./lib/storage');
 const { runTool, runCommandLine, runHostShell } = require('./lib/runner');
 const ui = require('./lib/ui');
+const assistantCommands = require('./lib/assistantCommands');
 
 // config.json 미존재 시 기본 스키마 자동 생성
 require('./lib/config');
@@ -944,6 +945,31 @@ async function showSessionLaunchMenu() {
 // 소유 프로필 정보가 없어서, 같은 프로필 재진입 시 재사용 판단에 이걸 쓴다.
 let lastAssistantSessionName = null;
 
+// 온보딩 미완료 상태로 채팅을 열었을 때 자동으로 보내는 첫 턴의 문구 — claude
+// --print 상주 세션은 입력이 들어와야만 응답하므로, 사람이 먼저 말을 걸지 않으면
+// ONBOARDING.md에 적힌 "먼저 인사하고 질문하라"는 지시가 영영 실행되지 않는다.
+// 이 한 줄을 시스템이 대신 보내 온보딩 대화를 강제로 개시시킨다.
+const ONBOARD_KICKOFF_MESSAGE = '온보딩을 시작해줘. 먼저 인사하고 첫 질문을 해줘.';
+
+// "이전 대화" 목록(lib/assistantConversationsDb.js)에 저장할 제목 — 첫 유저
+// 메시지의 앞 40자(공백 정리 후). 빈/미확보 시 폴백.
+function deriveConversationTitle(text) {
+  if (typeof text !== 'string') return '새 대화';
+  const collapsed = text.trim().replace(/\s+/g, ' ');
+  if (!collapsed) return '새 대화';
+  return collapsed.length > 40 ? collapsed.slice(0, 40) + '…' : collapsed;
+}
+
+// 대화 피커(아래 onLoadConversation)의 각 항목에 보여줄 짧은 시각 표기 —
+// lib/assistant.js의 fmtNow()와 같은 이유로(로케일 의존 toLocaleString 대신)
+// 수동 포맷.
+function fmtConversationTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}/${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 async function showAssistantChat(assistant, profile) {
   let session = null;
   // 세션 spawn 직후 1회 수신되는 meta(model/sessionId/slashCommands)와
@@ -951,6 +977,13 @@ async function showAssistantChat(assistant, profile) {
   // 반영되며, 여기서는 재진입/재사용 판단 등에 쓸 수 있도록 값을 보관해 둔다.
   let lastSessionMeta = null;
   let lastTurnUsage = null;
+  // "이전 대화" 저장(lib/assistantConversationsDb.js) 배선 — capturedSessionId는
+  // 이 화면 인스턴스가 지금까지 확인한 sessionId(meta 이벤트로만 알 수 있음).
+  // pendingFirstUserMsg는 sendTurn이 브랜드뉴 세션을 스폰하기로 결정한 순간(그
+  // 시점엔 아직 sessionId를 모름) 잠깐 보관해 두는 첫 유저 메시지 텍스트 —
+  // 뒤이어 meta가 도착하면 제목으로 소비되고 비워진다.
+  let capturedSessionId = null;
+  let pendingFirstUserMsg = null;
 
   assistant.refreshOnboardStatus(profile);
 
@@ -959,7 +992,7 @@ async function showAssistantChat(assistant, profile) {
   // 이 lazy decay 뿐 — 백그라운드 타이머로 깎지 않는다). 손상된 pet 블록이
   // 채팅 진입 자체를 막으면 안 되므로 통째로 fail-open.
   const petLib = require('./lib/pet');
-  const { saveAssistant } = require('./lib/storage');
+  const { saveAssistant, getAssistant } = require('./lib/storage');
   try {
     if (!profile.pet) profile.pet = { skinId: 'space-invader', vitals: petLib.defaultVitals() };
     if (!profile.pet.skinId) profile.pet.skinId = 'space-invader';
@@ -969,26 +1002,101 @@ async function showAssistantChat(assistant, profile) {
 
   const attach = (s) => {
     s.on('delta', chunk => view.appendDelta(chunk));
+    s.on('tool', evt => view.appendToolEvent(evt));
+    s.on('thinking', text => view.appendThinking(text));
     s.on('meta', meta => {
       lastSessionMeta = meta;
       view.setSessionMeta(meta);
+      // 이 화면 인스턴스가 처음 보는 sessionId일 때만 "새 대화"로 기록한다 —
+      // 재사용된 살아있는 세션의 재-attach(meta 재발신 없음)나 이미 기록된
+      // sessionId의 반복 수신(예: --resume이 같은 id를 다시 알려주는 경우)에는
+      // 건드리지 않는다(그 경우 lastAt 갱신은 아래 'done'에서만 일어난다).
+      try {
+        if (meta && meta.sessionId && meta.sessionId !== capturedSessionId) {
+          capturedSessionId = meta.sessionId;
+          const now = Date.now();
+          require('./lib/assistantConversationsDb').upsertConversation(profile.name, {
+            sessionId: meta.sessionId,
+            title: deriveConversationTitle(pendingFirstUserMsg),
+            startedAt: now,
+            lastAt: now,
+          });
+          pendingFirstUserMsg = null;
+        }
+      } catch {}
     });
     s.on('done', (finalText, usage) => {
       lastTurnUsage = usage;
       view.setTurnUsage(usage);
       view.finalizeTurn(finalText);
       view.setState('idle');
+      // 턴이 끝날 때마다 이 대화의 lastAt만 갱신 — title/startedAt은 건드리지
+      // 않는다(applyUpsert가 title 미지정 시 기존 값을 보존).
+      try {
+        if (capturedSessionId) {
+          require('./lib/assistantConversationsDb').upsertConversation(profile.name, {
+            sessionId: capturedSessionId,
+            lastAt: Date.now(),
+          });
+        }
+      } catch {}
       const wasOnboard = profile.isOnboard === true;
       assistant.refreshOnboardStatus(profile);
       if (!wasOnboard && profile.isOnboard === true) {
         view.appendSystem('✓ 온보딩이 완료되었습니다. 이제부터 방금 정한 페르소나로 대화합니다.');
+        // resolveSystemPrompt는 세션 "시작" 시점에만 재판단된다(핫스왑 없음, 의도적
+        // 단순화) — 방금 온보딩이 끝난 이 살아있는 세션은 여전히 spawn 당시의
+        // ONBOARDING.md 시스템 프롬프트로 도는 중이라, persona.md가 저장돼도 그
+        // 프로세스는 계속 온보딩 중인 것처럼 행동한다. 세션을 여기서 끊어 다음 턴에
+        // startAssistantSession이 다시 resolveSystemPrompt를 돌리도록 강제한다.
+        try { session.stop(); } catch {}
+        session = null;
+        lastAssistantSessionName = null;
       }
+      // 펫 vitals/agentEmotion — embodiment MCP(lib/assistantEmbodimentMcp.js)는 이
+      // 화면과 별도 자식 프로세스에서 assistants.json을 직접 갱신하므로, 이 in-memory
+      // profile.pet은 그 갱신을 자동으로 보지 못한다. 매 턴 종료 시 디스크에서 다시
+      // 읽어 화면에 반영한다(백그라운드 타이머 없는 lazy 재조회 — 코드베이스의 다른
+      // decay 처리와 동일한 원칙). 손상/누락은 fail-open으로 무시한다.
+      try {
+        const fresh = getAssistant(profile.name);
+        if (fresh && fresh.pet) {
+          profile.pet = fresh.pet;
+          view.setPetVitals(fresh.pet.vitals);
+          view.setAgentEmotion(fresh.pet.agentEmotion || null);
+        }
+      } catch {}
     });
     s.on('error', err => {
       view.appendSystem('오류: ' + (err && err.message || err));
       view.setState('idle');
       view.setMood('error');
     });
+  };
+
+  // onSubmit과 온보딩 자동 킥오프(아래) 양쪽이 공유하는 전송 경로 — 세션이 없거나
+  // 죽어 있으면 재사용/재시작 판단 후 시작하고, attach로 스트리밍 핸들러를 붙인
+  // 다음 메시지를 보낸다. 두 호출부 모두 동일한 view.appendDelta 등 렌더 경로를
+  // 타므로 자동 킥오프로 나온 인사도 사람이 친 메시지와 똑같이 스트리밍된다.
+  const sendTurn = (text) => {
+    try {
+      if (!session || session.alive === false) {
+        const active = assistant.getActiveAssistantSession();
+        const reusingLive = !!(active && active.alive && lastAssistantSessionName === profile.name);
+        session = reusingLive ? active : assistant.startAssistantSession(profile.name);
+        // 브랜드뉴 스폰일 때만 첫 메시지를 잠깐 보관한다 — 이 시점엔 sessionId를
+        // 아직 몰라(meta 이벤트로만 옴) 제목을 바로 지을 수 없다.
+        if (!reusingLive) pendingFirstUserMsg = text;
+        lastAssistantSessionName = profile.name;
+        attach(session);
+      }
+      view.setState('thinking');
+      session.sendMessage(text);
+    } catch (err) {
+      view.appendSystem('전송 실패: ' + (err && err.message || err));
+      view.setState('idle');
+      view.setMood('error');
+    }
   };
 
   const view = ui.assistantChatView({
@@ -998,8 +1106,10 @@ async function showAssistantChat(assistant, profile) {
     tokenAlias: profile.tokenAlias,
     model: profile.model,
     effort: profile.effort,
+    reasoning: profile.reasoning,
     skinId: profile.pet && profile.pet.skinId,
     petVitals: profile.pet && profile.pet.vitals,
+    agentEmotion: profile.pet && profile.pet.agentEmotion,
     onPetInteract(kind) {
       try {
         profile.pet.vitals = petLib.interact(profile.pet.vitals, kind);
@@ -1019,23 +1129,113 @@ async function showAssistantChat(assistant, profile) {
         lastAssistantSessionName = null;
       }
     },
-    onSubmit(text) {
-      try {
-        if (!session || session.alive === false) {
-          const active = assistant.getActiveAssistantSession();
-          session = (active && active.alive && lastAssistantSessionName === profile.name)
-            ? active
-            : assistant.startAssistantSession(profile.name);
-          lastAssistantSessionName = profile.name;
-          attach(session);
-        }
-        view.setState('thinking');
-        session.sendMessage(text);
-      } catch (err) {
-        view.appendSystem('전송 실패: ' + (err && err.message || err));
-        view.setState('idle');
-        view.setMood('error');
+    // Ctrl+\ 패널의 "이전 대화" 핫키(lib/ui.js assistantChatView 참고) — 별도
+    // 목록 오버레이로 이 프로필의 저장된 대화(lib/assistantConversationsDb.js)를
+    // 고르게 한 뒤, CONTINUE 모드로 재개한다(--resume만, --fork-session 없음 —
+    // 사용자 확정 결정). view.loadHistory로 과거 트랜스크립트를 화면에 통째로
+    // 시드한다. 트랜스크립트를 못 찾거나 파싱 실패해도 세션 재개 자체는
+    // fail-open으로 계속 진행한다.
+    async onLoadConversation() {
+      const convDb = require('./lib/assistantConversationsDb');
+      const list = convDb.getConversations(profile.name);
+      if (list.length === 0) {
+        view.appendSystem('저장된 이전 대화가 없습니다.');
+        return;
       }
+
+      const items = list.map((conv, i) => ({
+        key: String(i + 1),
+        label: conv.title || '새 대화',
+        desc: fmtConversationTime(conv.lastAt || conv.startedAt),
+      }));
+      const sel = await ui.menu('이전 대화', items, { back: true });
+      if (!sel) return;
+      const chosen = list[Number(sel.key) - 1];
+      if (!chosen) return;
+
+      if (session) {
+        try { session.stop(); } catch {}
+        session = null;
+        lastAssistantSessionName = null;
+      }
+
+      const assistantTranscript = require('./lib/assistantTranscript');
+      let seeded = [];
+      try {
+        const workspaceDir = assistant.ensureAssistantWorkspace(profile.configDir);
+        const transcriptPath = assistantTranscript.resolveTranscriptPath(profile.configDir, workspaceDir, chosen.sessionId);
+        if (transcriptPath) seeded = assistantTranscript.readTranscript(transcriptPath).entries;
+      } catch {}
+
+      view.loadHistory(seeded);
+      if (seeded.length === 0) {
+        view.appendSystem('이전 메시지를 불러오지 못했습니다 (세션은 이어집니다)');
+      }
+
+      // 재개 대상 sessionId는 이미 알고 있으므로 미리 기록해 둔다 — 재개 후
+      // 도착하는 meta가 같은 sessionId를 다시 알려줘도(재-upsert 트리거 조건은
+      // "처음 보는 sessionId"이므로) title을 폴백값으로 덮어쓰지 않는다.
+      capturedSessionId = chosen.sessionId;
+      pendingFirstUserMsg = null;
+
+      try {
+        session = assistant.startAssistantSession(profile.name, { resumeSessionId: chosen.sessionId });
+        lastAssistantSessionName = profile.name;
+        attach(session);
+      } catch (err) {
+        view.appendSystem('세션 재개 실패: ' + (err && err.message || err));
+      }
+    },
+    // 설정 패널(Ctrl+\)의 Model/Effort/Reasoning 3행이 바뀔 때마다 호출된다.
+    // model/effort 는 spawn 시점에 고정되는 claude CLI 플래그(lib/assistant.js
+    // startAssistantSession의 spawnArgs)라 핫스왑 경로가 없다 — 값을 저장만
+    // 해두고, 살아있는 세션을 끊어(onTokenChange와 동일한 재시작 패턴) 다음
+    // onSubmit이 새 값으로 다시 spawn하게 한다. reasoning은 화면 전용 토글
+    // (ui.js가 이미 즉시 다시 그렸음)이라 이것만 바뀐 경우엔 세션을 건드리지
+    // 않는다 — 진행 중인 응답을 끊지 않기 위한 핵심 요구사항.
+    onSettingsChange(next) {
+      const prev = { model: profile.model, effort: profile.effort };
+      const restart = require('./lib/assistantSettingsPanel').shouldRestartOnSettingsChange(prev, next);
+
+      if (next.model === 'default') delete profile.model; else profile.model = next.model;
+      if (next.effort === 'default') delete profile.effort; else profile.effort = next.effort;
+      profile.reasoning = next.reasoning !== false;
+      require('./lib/storage').saveAssistant(profile);
+
+      if (restart) {
+        if (session) {
+          try { session.stop(); } catch {}
+          session = null;
+          lastAssistantSessionName = null;
+        }
+        view.appendSystem('설정 변경 — 다음 메시지부터 적용됩니다.');
+      }
+    },
+    onSubmit(text) {
+      // '/'-슬래시 명령 인터셉터 — lib/assistantCommands.js 의 레지스트리에서
+      // kind==='local' 인 명령(현재 /skills 하나)만 void 가 직접 처리하고
+      // child 로는 보내지 않는다. 그 외(kind==='passthrough': /mcp, /usage,
+      // /model, /effort)와 일반 메시지는 오늘과 동일하게 그대로 sendTurn.
+      const token = text.trim().split(/\s+/)[0];
+      const entry = assistantCommands.COMMANDS.find(c => c.name === token);
+      if (entry && entry.kind === 'local') {
+        if (token === '/skills') {
+          const skills = lastSessionMeta && lastSessionMeta.skills;
+          if (Array.isArray(skills) && skills.length > 0) {
+            const lines = skills.map(s => {
+              if (typeof s === 'string') return '  · ' + s;
+              const name = (s && (s.name || s.id)) || '(이름 없음)';
+              const desc = s && s.description ? ' — ' + s.description : '';
+              return '  · ' + name + desc;
+            });
+            view.appendSystem('사용 가능한 스킬:\n' + lines.join('\n'));
+          } else {
+            view.appendSystem('세션이 시작되면 사용할 수 있습니다 — 먼저 한 번 말을 걸어보세요.');
+          }
+        }
+        return;
+      }
+      sendTurn(text);
       // confused 무드는 빈/파싱불가 응답을 뜻하나, 현재 done 이벤트에서
       // 이를 error 와 구분할 깔끔한 신호가 없어 이번 회차 트리거 배선은 보류.
     },
@@ -1043,6 +1243,15 @@ async function showAssistantChat(assistant, profile) {
 
   if (profile.isOnboard !== true) {
     view.appendSystem('아직 온보딩이 완료되지 않았습니다 — 대화를 통해 성격/스타일을 정하면 persona.md가 저장되고 온보딩이 완료됩니다.');
+    // 이 프로필의 상주 세션이 이미 살아서(=온보딩 대화가 진행 중) 재사용되는
+    // 경우엔 다시 인사시키지 않는다 — 진행 중인 질문에 끼어들어 혼란을 주는 걸
+    // 막기 위함. 완전히 새로 시작하는 세션일 때만(이번이 이 세션의 첫 오픈) 시스템이
+    // 대신 첫 턴을 보내 에이전트가 먼저 인사하고 질문을 시작하게 만든다.
+    const active = assistant.getActiveAssistantSession();
+    const resumingLiveSession = !!(active && active.alive && lastAssistantSessionName === profile.name);
+    if (!resumingLiveSession) {
+      sendTurn(ONBOARD_KICKOFF_MESSAGE);
+    }
   }
 
   await view.done;
@@ -1160,8 +1369,10 @@ async function assistantDetailMenu(assistant, profile) {
   }
 }
 
-const ASSISTANT_MODEL_OPTIONS = ['default', 'sonnet', 'opus', 'haiku', 'fable', 'best'];
-const ASSISTANT_EFFORT_OPTIONS = ['default', 'low', 'medium', 'high', 'xhigh', 'max'];
+// 이 두 목록은 lib/assistant.js가 소유한다(그쪽 module.exports 주석 참고) —
+// lib/ui.js(설정 패널)도 같은 목록을 import해야 해서, launcher.js가 아니라
+// 순환 의존이 없는 lib/assistant.js에 둔다.
+const { ASSISTANT_MODEL_OPTIONS, ASSISTANT_EFFORT_OPTIONS } = require('./lib/assistant');
 
 // VOID 설정 화면(테마/여백 콤보 편집)과 동일한 콤보 행 편집 패턴 — 화살표로
 // 값을 바꾸고 '저장'을 골라야 실제로 반영된다.
@@ -1285,12 +1496,15 @@ async function showAssistantMenu() {
     let profiles = [];
     try { profiles = assistant.listAssistantProfiles(); } catch {}
     const items = [
-      { key: 'n', label: '새 어시스턴트 만들기' },
+      // 기존 어시스턴트를 먼저(기본 선택), '새로 만들기'는 맨 아래로 —
+      // 엔터 연타 시 신규 생성으로 잘못 빠지지 않게 한다.
       ...profiles.map((p, i) => ({
         key: String(i + 1),
         label: p.name,
         desc: `${p.toolCommand || 'claude'}  ${p.created_at || ''}${p.persona ? '  · ' + p.persona : ''}`,
       })),
+      { key: 's', label: '스킬 설치 (디렉토리에서)', desc: '_global/g_skills 에 스킬을 심링크로 주입' },
+      { key: 'n', label: '새 어시스턴트 만들기' },
     ];
 
     const sel = await ui.menu('개인비서', items, { back: true, enableDelete: true });
@@ -1311,6 +1525,26 @@ async function showAssistantMenu() {
           }
         }
       }
+      continue;
+    }
+
+    if (sel.key === 's') {
+      const DEFAULT_SKILLS_SRC = '/mnt/c/DEV/skills';
+      const rawSrc = await ui.input(`스킬 소스 디렉토리 경로 (기본: ${DEFAULT_SKILLS_SRC}): `);
+      if (rawSrc === null) continue;
+      const src = rawSrc.trim() || DEFAULT_SKILLS_SRC;
+
+      const result = assistant.installSkillsFromDir(src);
+      const lines = [
+        `설치 ${result.installed.length}개, 기존 ${result.already.length}개, 건너뜀 ${result.skipped.length}개`,
+      ];
+      if (result.installed.length) lines.push('  설치됨: ' + result.installed.join(', '));
+      if (result.conflicts.length) lines.push(c.warn + '  충돌(건너뜀): ' + result.conflicts.join(', ') + c.RESET);
+      if (result.errors.length) {
+        lines.push(c.warn + '  오류:' + c.RESET);
+        for (const e of result.errors) lines.push(`    ${e.name}: ${e.error}`);
+      }
+      await ui.message(lines.join('\n'));
       continue;
     }
 

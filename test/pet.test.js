@@ -117,6 +117,30 @@ test('deriveEmotion falls back to neutral for an unknown moodState', () => {
   assert.equal(pet.deriveEmotion({}), 'neutral');
 });
 
+test('deriveEmotion prioritizes a fresh agentEmotion over moodState AND vitals thresholds', () => {
+  const now = 10_000;
+  const fresh = { emotion: 'love', expiresAt: now + 1000 };
+  assert.equal(pet.deriveEmotion({ moodState: 'error', vitals: { satiety: 5, energy: 5 }, agentEmotion: fresh, now }), 'love');
+  assert.equal(pet.deriveEmotion({ moodState: 'idle', vitals: { satiety: 5, energy: 5 }, agentEmotion: fresh, now }), 'love');
+});
+
+test('deriveEmotion ignores an expired agentEmotion and falls back to normal behavior', () => {
+  const now = 10_000;
+  const expired = { emotion: 'love', expiresAt: now - 1 };
+  assert.equal(pet.deriveEmotion({ moodState: 'error', agentEmotion: expired, now }), 'angry');
+  assert.equal(pet.deriveEmotion({ moodState: 'idle', vitals: { satiety: 80, energy: 80 }, agentEmotion: expired, now }), 'neutral');
+});
+
+test('deriveEmotion ignores an agentEmotion with an unknown emotion value', () => {
+  const now = 10_000;
+  const bogus = { emotion: 'not-a-real-emotion', expiresAt: now + 1000 };
+  assert.equal(pet.deriveEmotion({ moodState: 'happy', agentEmotion: bogus, now }), 'happy');
+});
+
+test('deriveEmotion treats a missing expiresAt as never-expiring', () => {
+  assert.equal(pet.deriveEmotion({ moodState: 'idle', agentEmotion: { emotion: 'cool' } }), 'cool');
+});
+
 test('getSkin returns the registered default space-invader skin and falls back to it for unknown ids', () => {
   const skin = pet.getSkin('space-invader');
   assert.equal(skin.id, 'space-invader');
@@ -129,10 +153,39 @@ test('listSkins exposes at least the default skin with an id/label', () => {
   assert.ok(skins.some(s => s.id === 'space-invader' && typeof s.label === 'string'));
 });
 
-test('SpaceInvaderSkin.drawSprite renders one line per row, no ANSI color codes, for every base emotion and both frames', () => {
+test('getIdleAnimConfig fills in DEFAULT_IDLE_ANIM for a skin with no idleAnim capability at all', () => {
+  const cfg = pet.getIdleAnimConfig({ id: 'no-anim-declared' });
+  assert.equal(cfg.enabled, true);
+  assert.ok(cfg.blinkMinMs > 0 && cfg.blinkMaxMs > cfg.blinkMinMs);
+  assert.ok(cfg.breathePeriodMs > 0);
+});
+
+test('getIdleAnimConfig merges a partial skin.idleAnim override on top of the defaults', () => {
+  const cfg = pet.getIdleAnimConfig({ id: 'custom-cadence', idleAnim: { breathePeriodMs: 900 } });
+  assert.equal(cfg.breathePeriodMs, 900); // overridden
+  assert.equal(cfg.enabled, true); // default kept
+});
+
+test('getIdleAnimConfig respects an explicit idleAnim.enabled:false opt-out', () => {
+  const cfg = pet.getIdleAnimConfig({ id: 'no-thanks', idleAnim: { enabled: false } });
+  assert.equal(cfg.enabled, false);
+});
+
+test('getIdleAnimConfig treats a missing/null skin as disabled-by-default-shape (still returns a full config object, fail-open)', () => {
+  const cfg = pet.getIdleAnimConfig(null);
+  assert.equal(cfg.enabled, true); // DEFAULT_IDLE_ANIM.enabled — no skin to override it
+  assert.ok(cfg.blinkMinMs > 0);
+});
+
+test('SpaceInvaderSkin declares idleAnim: {enabled:true} as its capability metadata', () => {
+  assert.equal(SpaceInvaderSkin.idleAnim.enabled, true);
+});
+
+test('SpaceInvaderSkin.drawSprite renders one line per row, no ANSI color codes, for every base emotion and every animPhase combination', () => {
+  const animPhases = [undefined, { blink: false, breathe: 0 }, { blink: true, breathe: 0 }, { blink: false, breathe: 1 }, { blink: true, breathe: 1 }];
   for (const emotion of pet.BASE_EMOTIONS) {
-    for (const frame of [0, 1]) {
-      const lines = SpaceInvaderSkin.drawSprite({ emotion, vitals: {}, frame });
+    for (const animPhase of animPhases) {
+      const lines = SpaceInvaderSkin.drawSprite({ emotion, vitals: {}, animPhase });
       assert.ok(Array.isArray(lines) && lines.length > 0);
       for (const line of lines) {
         assert.equal(typeof line, 'string');
@@ -142,23 +195,68 @@ test('SpaceInvaderSkin.drawSprite renders one line per row, no ANSI color codes,
   }
 });
 
-test('SpaceInvaderSkin.drawSprite never throws on unknown/undefined emotion or frame (render-path fail-open)', () => {
+test('SpaceInvaderSkin.drawSprite never throws on unknown/undefined emotion or animPhase (render-path fail-open)', () => {
   assert.doesNotThrow(() => SpaceInvaderSkin.drawSprite({}));
-  assert.doesNotThrow(() => SpaceInvaderSkin.drawSprite({ emotion: 'not-a-real-emotion', frame: 99 }));
-  assert.doesNotThrow(() => SpaceInvaderSkin.drawSprite({ emotion: undefined, frame: undefined }));
+  assert.doesNotThrow(() => SpaceInvaderSkin.drawSprite({ emotion: 'not-a-real-emotion', animPhase: { blink: true, breathe: 1 } }));
+  assert.doesNotThrow(() => SpaceInvaderSkin.drawSprite({ emotion: undefined, animPhase: undefined }));
 });
 
 test('SpaceInvaderSkin.drawSprite accepts 16-vocab emotions by folding them via mapEmotion', () => {
-  const laughing = SpaceInvaderSkin.drawSprite({ emotion: 'laughing', frame: 0 });
-  const happy = SpaceInvaderSkin.drawSprite({ emotion: 'happy', frame: 0 });
+  const laughing = SpaceInvaderSkin.drawSprite({ emotion: 'laughing' });
+  const happy = SpaceInvaderSkin.drawSprite({ emotion: 'happy' });
   assert.deepEqual(laughing, happy);
 });
 
 test('pet.padToGrid(drawSprite(...)) conforms to the PET_GRID contract (exact rows x cols) for every base emotion', () => {
   for (const emotion of pet.BASE_EMOTIONS) {
-    const graded = pet.padToGrid(SpaceInvaderSkin.drawSprite({ emotion, frame: 0 }));
+    const graded = pet.padToGrid(SpaceInvaderSkin.drawSprite({ emotion }));
     assert.equal(graded.length, pet.PET_GRID.rows);
     for (const line of graded) assert.equal(line.length, pet.PET_GRID.cols);
+  }
+});
+
+test('SpaceInvaderSkin.drawSprite: omitting animPhase is byte-identical to explicit {blink:false, breathe:0} (default-frame contract)', () => {
+  for (const emotion of pet.BASE_EMOTIONS) {
+    const omitted = SpaceInvaderSkin.drawSprite({ emotion, vitals: {} });
+    const explicitDefault = SpaceInvaderSkin.drawSprite({ emotion, vitals: {}, animPhase: { blink: false, breathe: 0 } });
+    assert.deepEqual(omitted, explicitDefault);
+  }
+});
+
+test('SpaceInvaderSkin.drawSprite: blink closes both eyes to "-" for non-sleepy emotions, and is a no-op for sleepy', () => {
+  for (const emotion of pet.BASE_EMOTIONS) {
+    const still = SpaceInvaderSkin.drawSprite({ emotion });
+    const blinking = SpaceInvaderSkin.drawSprite({ emotion, animPhase: { blink: true, breathe: 0 } });
+    if (emotion === 'sleepy') {
+      // eyes already closed ('-') for sleepy — blink changes nothing.
+      assert.deepEqual(blinking, still);
+    } else {
+      assert.notDeepEqual(blinking, still);
+      // eye row is index 1 (antenna=0, eyes=1) — both eye glyphs become '-'.
+      const eyeRow = blinking[1];
+      const eyeChars = [...eyeRow].filter(ch => ch !== ' ');
+      assert.equal(eyeChars[0], '-');
+      assert.equal(eyeChars[eyeChars.length - 1], '-');
+    }
+  }
+});
+
+test('SpaceInvaderSkin.drawSprite: breathe swaps the 2 outer chest-fill cells from block to shade without changing row count/geometry', () => {
+  for (const emotion of pet.BASE_EMOTIONS) {
+    const still = SpaceInvaderSkin.drawSprite({ emotion });
+    const breathing = SpaceInvaderSkin.drawSprite({ emotion, animPhase: { blink: false, breathe: 1 } });
+    assert.equal(breathing.length, still.length, 'breathe must not add/remove rows');
+    for (let i = 0; i < still.length; i++) assert.equal(breathing[i].length, still[i].length, `row ${i} width must not change`);
+    assert.notDeepEqual(breathing, still);
+    // chest row is index 5 (antenna,eyes,neck,head,shoulder,chest,...).
+    const chestChars = [...still[5]].filter(ch => ch !== ' ');
+    const breathingChestChars = [...breathing[5]].filter(ch => ch !== ' ');
+    assert.equal(chestChars[0], '█');
+    assert.equal(chestChars[chestChars.length - 1], '█');
+    assert.equal(breathingChestChars[0], '▓');
+    assert.equal(breathingChestChars[breathingChestChars.length - 1], '▓');
+    // only the outer 2 cells change — the inner fill stays solid.
+    for (let i = 1; i < chestChars.length - 1; i++) assert.equal(breathingChestChars[i], chestChars[i]);
   }
 });
 
@@ -171,7 +269,7 @@ test('padToGrid pads short rows, truncates long rows, and fills/trims missing/ex
 
 test('SpaceInvaderSkin varies antenna/shoulder pose per emotion, not just the eyes (distinctness requirement)', () => {
   const byEmotion = {};
-  for (const emo of pet.BASE_EMOTIONS) byEmotion[emo] = SpaceInvaderSkin.drawSprite({ emotion: emo, frame: 0 });
+  for (const emo of pet.BASE_EMOTIONS) byEmotion[emo] = SpaceInvaderSkin.drawSprite({ emotion: emo });
   const antennaRows = new Set(Object.values(byEmotion).map(rows => rows[0]));
   const shoulderRows = new Set(Object.values(byEmotion).map(rows => rows[4]));
   assert.ok(antennaRows.size > 1, 'antenna row (row 0) should differ across at least some emotions');
