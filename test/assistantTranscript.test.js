@@ -93,6 +93,28 @@ test('parseTranscript: non-string input yields an empty result rather than throw
   assert.deepEqual(transcript.parseTranscript(null), { entries: [], aiTitle: null });
 });
 
+// ── entriesToMarkdown: pure serialization, no fs ─────────────────────────
+
+test('entriesToMarkdown: renders a title heading and a section per entry', () => {
+  const md = transcript.entriesToMarkdown(
+    [
+      { who: 'user', text: '안녕' },
+      { who: 'assistant', text: '안녕하세요!' },
+    ],
+    { title: '테스트 대화' }
+  );
+  assert.match(md, /^# 테스트 대화/);
+  assert.match(md, /## 👤 User/);
+  assert.match(md, /안녕/);
+  assert.match(md, /## 🤖 Assistant/);
+  assert.match(md, /안녕하세요!/);
+});
+
+test('entriesToMarkdown: falls back to a default title and tolerates an empty entries list', () => {
+  const md = transcript.entriesToMarkdown([], {});
+  assert.match(md, /^# 새 대화/);
+});
+
 // ── dashedFolderName: the pure cwd→folder-name transform ────────────────
 
 test('dashedFolderName: replaces every / and . with -', () => {

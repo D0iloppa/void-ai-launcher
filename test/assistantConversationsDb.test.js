@@ -100,6 +100,27 @@ test('getConversations: unknown profile returns an empty array', () => {
   assert.deepEqual(convDb.getConversations('never-seen-conv-' + process.pid), []);
 });
 
+test('renameConversation: updates only the title, preserving startedAt/lastAt', () => {
+  const profile = 'conv-profile-rename-' + process.pid;
+  convDb.upsertConversation(profile, { sessionId: 'r1', title: 'original', startedAt: 1, lastAt: 2 });
+  convDb.renameConversation(profile, 'r1', 'renamed');
+
+  const list = convDb.getConversations(profile);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].title, 'renamed');
+  assert.equal(list[0].startedAt, 1);
+  assert.equal(list[0].lastAt, 2);
+});
+
+test('renameConversation: unknown sessionId is treated like upsertConversation (creates a new entry, applyUpsert semantics)', () => {
+  const profile = 'conv-profile-rename-new-' + process.pid;
+  convDb.upsertConversation(profile, { sessionId: 'r1', title: 'original', startedAt: 1, lastAt: 1 });
+  convDb.renameConversation(profile, 'never-seen', 'renamed');
+
+  const list = convDb.getConversations(profile);
+  assert.deepEqual(list.map(e => e.sessionId).sort(), ['never-seen', 'r1']);
+});
+
 // ── applyDelete: pure logic, no DB involved ─────────────────────────────
 
 test('applyDelete: removes the matching sessionId', () => {

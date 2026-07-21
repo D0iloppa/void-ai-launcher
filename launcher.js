@@ -1156,8 +1156,60 @@ async function showAssistantChat(assistant, profile) {
           label: conv.title || '새 대화',
           desc: fmtConversationTime(conv.lastAt || conv.startedAt),
         }));
-        const sel = await ui.menu('이전 대화', items, { back: true, enableDelete: true });
+        const sel = await ui.menu('이전 대화', items, { back: true, enableDelete: true, enableRename: true, enableExport: true });
         if (!sel) return;
+
+        if (sel.action === 'rename') {
+          const target = list[Number(sel.key) - 1];
+          if (target) {
+            const newTitle = await ui.input(`새 제목 (현재: ${target.title || '새 대화'}): `);
+            if (newTitle && newTitle.trim()) {
+              convDb.renameConversation(profile.name, target.sessionId, newTitle.trim());
+            }
+          }
+          continue;
+        }
+
+        if (sel.action === 'export') {
+          const target = list[Number(sel.key) - 1];
+          if (target) {
+            try {
+              const workspaceDir = assistant.ensureAssistantWorkspace(profile.configDir);
+              const transcriptPath = assistantTranscript.resolveTranscriptPath(profile.configDir, workspaceDir, target.sessionId);
+              if (!transcriptPath) {
+                view.appendSystem('내보낼 트랜스크립트를 찾지 못했습니다.');
+                continue;
+              }
+              const { entries } = assistantTranscript.readTranscript(transcriptPath);
+              if (!entries || entries.length === 0) {
+                view.appendSystem('내보낼 대화 내용이 없습니다.');
+                continue;
+              }
+              const md = assistantTranscript.entriesToMarkdown(entries, { title: target.title });
+
+              // 제목을 파일명으로 안전하게 변환(경로 구분자/제어문자 제거,
+              // 공백 축약, 길이 제한) — 비어 있으면 sessionId로 대체한다.
+              const safeName = (target.title || target.sessionId || 'conversation')
+                .replace(/[\\/:*?"<>|]/g, '_')
+                .replace(/\s+/g, ' ')
+                .trim()
+                .slice(0, 60) || target.sessionId || 'conversation';
+              const defaultPath = path.join(process.cwd(), `${safeName}.md`);
+
+              const rawOut = await ui.input(`내보낼 경로 (기본: ${defaultPath}): `);
+              let outPath = (rawOut && rawOut.trim()) ? rawOut.trim() : defaultPath;
+              if (outPath.startsWith('~')) {
+                outPath = path.join(require('os').homedir(), outPath.slice(1));
+              }
+
+              fs.writeFileSync(outPath, md, 'utf8');
+              view.appendSystem('내보냄: ' + outPath);
+            } catch (err) {
+              view.appendSystem('내보내기 실패: ' + (err && err.message || err));
+            }
+          }
+          continue;
+        }
 
         if (sel.action === 'delete') {
           const target = list[Number(sel.key) - 1];
