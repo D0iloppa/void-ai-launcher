@@ -3,6 +3,10 @@
     "void-context": {
       "command": "node",
       "args": ["lib/voidContextMcp.js"]
+    },
+    "void-dispatch": {
+      "command": "node",
+      "args": ["lib/voidDispatchMcp.js"]
     }
   }
 }
