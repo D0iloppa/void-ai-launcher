@@ -7,6 +7,10 @@
     "void-dispatch": {
       "command": "node",
       "args": ["lib/voidDispatchMcp.js"]
+    },
+    "void-notify": {
+      "command": "node",
+      "args": ["lib/voidNotifyMcp.js"]
     }
   }
 }

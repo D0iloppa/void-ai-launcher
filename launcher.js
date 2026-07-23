@@ -204,6 +204,11 @@ function getHelpText() {
     '  void tokens',
     '  void sessions',
     '  void update',
+    '  void notify --add-channel <alias> --api-key <token> --send-to <chatId[,chatId2]>',
+    '  void notify --list-channels',
+    '  void notify --send --to <alias> --subject <subject> --content <content>',
+    '  void notify-worker',
+    '  void daemon <start|stop|status|restart>',
     '  void <tool> [args...] [--anon]',
     '',
     'Configured tools:',
@@ -214,6 +219,8 @@ function getHelpText() {
     '  void codex exec "review this repo"',
     '  void claude --anon',
     '  void host',
+    '  void notify --send --to my-telegram --subject "빌드 완료" --content "성공"',
+    '  void daemon start',
     '',
     '1. 주요 메뉴 설명',
     '   - History: 최근에 실행했던 도구와 인수들을 간편하게 재실행합니다.',
@@ -339,6 +346,26 @@ async function handleArgs(argv) {
       await runHostShell(c, config);
       return;
     }
+    case 'notify-worker': {
+      // 1분 간격 cron/데몬이 호출하는 순수 1회 실행 — 대화형 메뉴 없이 헤드리스로 끝난다.
+      // runWorkerOnce 자체는 드라이버(cron 한 줄이든, 상주 데몬의 setInterval 루프든)를
+      // 전혀 몰라도 되게 설계돼 있다 — 여기서는 그중 "1회 수동/스크립트 실행" 드라이버 역할만 한다.
+      const { runWorkerOnce } = require('./lib/voidNotify');
+      const summary = await runWorkerOnce();
+      console.log(
+        `processed=${summary.processed} sent=${summary.sent} failed=${summary.failed} deferred=${summary.deferred ?? 0}` +
+        (summary.error ? ` error=${summary.error}` : '')
+      );
+      return;
+    }
+    case 'notify': {
+      await handleNotifyCli(rest);
+      return;
+    }
+    case 'daemon': {
+      await handleDaemonCli(rest);
+      return;
+    }
     case 'update': {
       // 인수 직행(void update) — 대화형 메뉴가 아니므로 확인 프롬프트 없이
       // checkUpdate → (뒤처져 있으면) applyUpdate 를 그대로 실행한다. 이미
@@ -376,6 +403,231 @@ async function handleArgs(argv) {
       const extraArgs = rest.filter(arg => arg !== '--anon' && arg !== '-a');
       await launchTool(tool, isAnon ? 'anon' : false, extraArgs);
     }
+  }
+}
+
+// `void notify --flag value ...` 를 { flags, positional } 로 파싱한다. `--foo` 다음 토큰이
+// `--` 로 시작하지 않으면 그 값을 flags.foo 로 소비하고, 그렇지 않으면(또는 마지막 인자면)
+// boolean flags.foo=true 로 취급한다(예: `--send --to x` 에서 --send 는 boolean).
+function parseNotifyFlags(rest) {
+  const flags = {};
+  const positional = [];
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (arg.startsWith('--')) {
+      const key = arg.slice(2);
+      const next = rest[i + 1];
+      if (next !== undefined && !next.startsWith('--')) {
+        flags[key] = next;
+        i++;
+      } else {
+        flags[key] = true;
+      }
+    } else {
+      positional.push(arg);
+    }
+  }
+  return { flags, positional };
+}
+
+// void-notify 헤드리스 admin CLI(void notify ...) — 채널 등록/조회/삭제와 즉시 발송 큐잉만
+// 다룬다. 워커 폴링 자체는 별도 드라이버(notify-worker CLI 또는 향후 상주 데몬)의 몫이라
+// 여기서는 건드리지 않는다.
+async function handleNotifyCli(rest) {
+  const { flags } = parseNotifyFlags(rest);
+  const voidNotify = require('./lib/voidNotify');
+
+  if (flags['add-channel']) {
+    const alias = flags['add-channel'];
+    const kind = typeof flags.kind === 'string' ? flags.kind : 'telegram';
+    const apiKey = typeof flags['api-key'] === 'string' ? flags['api-key'] : undefined;
+    const sendTo = typeof flags['send-to'] === 'string'
+      ? flags['send-to'].split(',').map(s => s.trim()).filter(Boolean)
+      : [];
+    const label = typeof flags.label === 'string' ? flags.label : undefined;
+    const enabled = !flags.disabled;
+    try {
+      const result = voidNotify.putChannel({ alias, kind, label, api_key: apiKey, send_to: sendTo, enabled });
+      console.log(`채널 등록 완료: ${JSON.stringify(result)}`);
+    } catch (e) {
+      console.error(e.message);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (flags['list-channels']) {
+    console.log(JSON.stringify(voidNotify.listChannels(), null, 2));
+    return;
+  }
+
+  if (flags['del-channel']) {
+    try {
+      console.log(JSON.stringify(voidNotify.delChannel(flags['del-channel'])));
+    } catch (e) {
+      console.error(e.message);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (flags.send) {
+    const providerKey = typeof flags.to === 'string' ? flags.to : flags['provider-key'];
+    const subject = flags.subject;
+    const content = flags.content;
+    const when = typeof flags.when === 'string' ? flags.when : 'now';
+    try {
+      const result = voidNotify.notify({ when, subject, content, provider_key: providerKey });
+      console.log(JSON.stringify(result));
+    } catch (e) {
+      console.error(e.message);
+      process.exitCode = 1;
+    }
+    return;
+  }
+
+  if (flags['list-queue']) {
+    const status = typeof flags.status === 'string' ? flags.status : undefined;
+    const channelKey = typeof flags.to === 'string' ? flags.to : undefined;
+    console.log(JSON.stringify(voidNotify.listQueue({ channelKey, status }), null, 2));
+    return;
+  }
+
+  console.log([
+    'void notify 사용법:',
+    '  void notify --add-channel <alias> --kind telegram --api-key <token> --send-to <chatId[,chatId2]> [--label <label>] [--disabled]',
+    '  void notify --list-channels',
+    '  void notify --del-channel <alias>',
+    '  void notify --send --to <alias> --subject <subject> --content <content> [--when <ISO>]',
+    '  void notify --list-queue [--to <alias>] [--status queued|locked|sent|failed]',
+  ].join('\n'));
+}
+
+// ── voidemon(상주 데몬) 헤드리스 CLI(void daemon ...) ───────────────────────
+// lib/voidDaemon.js 가 순수 로직(싱글턴 pidfile + runLoop)을 갖고, 여기서는 프로세스
+// 모델(스폰/시그널/대기)만 다룬다 — launcher.js:314-380 근방 다른 헤드리스 case 들과
+// 동일한 스타일(요청 파싱 → lib/* 호출 → 결과 출력).
+
+// `void daemon start` 가 스폰하는 실제 백그라운드 프로세스. 이 함수 자체가 실행되는
+// 컨텍스트(child_process.spawn 된 detached 자식)에서 싱글턴 pidfile 을 직접 획득한다 —
+// "긴 생명주기를 가진 프로세스가 자기 락을 스스로 쥔다" 원칙. SIGTERM/SIGINT 는
+// stopRequested 플래그만 세우고, voidDaemon.runLoop 의 기본 sleep 이 1초 단위로
+// shouldStop 을 재확인하므로 늦어도 ~1초 안에 루프가 빠져나온다.
+async function runDaemonForeground(voidDaemon) {
+  const acquired = voidDaemon.acquireSingleton();
+  if (!acquired.ok) {
+    process.stderr.write(`voidemon: 이미 실행 중입니다(pid ${acquired.pid}) — 시작을 취소합니다.\n`);
+    process.exit(1);
+  }
+
+  let stopRequested = false;
+  const requestStop = () => { stopRequested = true; };
+  process.on('SIGTERM', requestStop);
+  process.on('SIGINT', requestStop);
+
+  console.error(`[voidemon] 시작됨 pid=${process.pid} pollMs=${voidDaemon.pollMsFromEnv()}`);
+  await voidDaemon.runLoop({ shouldStop: () => stopRequested });
+  voidDaemon.releaseSingleton();
+  console.error('[voidemon] 정상 종료');
+  process.exit(0);
+}
+
+// `void daemon start` — 이미 살아있는 인스턴스가 있으면 스폰하지 않고 그대로 반환한다
+// (실제 락 획득은 detached 자식(--run)이 스스로 한다 — 여기서 미리 acquire 해버리면 부모
+// 프로세스가 락을 쥔 채 바로 죽어버리는 꼴이 된다). readPidFile+isAlive 로 살아있는지만
+// 미리 확인하는 "peek" 이며, 이 확인과 자식의 실제 acquire 사이에 극히 좁은 경합 창이
+// 있을 수 있으나 voidDaemon.js 상단 주석의 논리(claimOne CAS 가 궁극적 안전망)가 동일하게
+// 적용된다.
+function startDaemon(voidDaemon) {
+  const existingPid = voidDaemon.readPidFile();
+  if (existingPid && voidDaemon.isAlive(existingPid)) {
+    console.log(`voidemon already running (pid ${existingPid})`);
+    return;
+  }
+  // 실제 detached spawn 은 lib/voidDaemon.js 의 spawnDetachedDaemon() 하나로 통일한다 —
+  // ensureDaemonRunning()(아래 main() 의 waker 훅)도 동일 함수를 호출하므로 두 경로가
+  // 절대 어긋날(diverge) 수 없다.
+  const child = voidDaemon.spawnDetachedDaemon({ entryFile: __filename });
+  console.log(`voidemon started (pid ${child.pid})`);
+}
+
+// `void daemon stop` — SIGTERM 후 최대 5초간(200ms 간격) 생존 여부를 폴링한다. 정상
+// 종료라면 자식이 스스로 releaseSingleton() 해 pidfile 을 지우지만, 혹시 남아있으면(예:
+// 강제로 죽어 release 를 못 한 경우) 살아있지 않은 걸 확인한 뒤 우리가 정리한다.
+async function stopDaemon(voidDaemon, { quiet = false } = {}) {
+  const pid = voidDaemon.readPidFile();
+  if (!pid || !voidDaemon.isAlive(pid)) {
+    if (pid) { try { fs.unlinkSync(voidDaemon.pidFilePath()); } catch {} }
+    if (!quiet) console.log('voidemon is not running');
+    return;
+  }
+  try {
+    process.kill(pid, 'SIGTERM');
+  } catch (e) {
+    if (!quiet) console.log(`voidemon: pid ${pid} 에 신호를 보내지 못했습니다: ${e.message}`);
+    return;
+  }
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && voidDaemon.isAlive(pid)) {
+    await new Promise(r => setTimeout(r, 200));
+  }
+  if (voidDaemon.isAlive(pid)) {
+    if (!quiet) console.log(`voidemon: pid ${pid} 가 5초 내에 종료되지 않았습니다`);
+    return;
+  }
+  const remaining = voidDaemon.readPidFile();
+  if (remaining === pid) { try { fs.unlinkSync(voidDaemon.pidFilePath()); } catch {} }
+  if (!quiet) console.log(`voidemon stopped (pid ${pid})`);
+}
+
+function printDaemonStatus(voidDaemon) {
+  const pid = voidDaemon.readPidFile();
+  const running = pid && voidDaemon.isAlive(pid);
+  if (!running) {
+    console.log('voidemon: stopped');
+    return;
+  }
+  console.log(`voidemon: running (pid ${pid}, pollMs=${voidDaemon.pollMsFromEnv()})`);
+  try {
+    const content = fs.readFileSync(voidDaemon.logFilePath(), 'utf8');
+    const lines = content.split('\n').filter(Boolean).slice(-10);
+    if (lines.length) {
+      console.log('--- last log lines ---');
+      lines.forEach(l => console.log(l));
+    }
+  } catch {}
+}
+
+async function handleDaemonCli(rest) {
+  const sub = (rest[0] || '').toLowerCase();
+  const voidDaemon = require('./lib/voidDaemon');
+
+  switch (sub) {
+    case 'start':
+      startDaemon(voidDaemon);
+      return;
+    case '--run': // 내부용 — daemon start 가 스폰하는 detached 자식이 실행하는 진입점
+      await runDaemonForeground(voidDaemon);
+      return;
+    case 'stop':
+      await stopDaemon(voidDaemon);
+      return;
+    case 'status':
+      printDaemonStatus(voidDaemon);
+      return;
+    case 'restart':
+      await stopDaemon(voidDaemon, { quiet: true });
+      startDaemon(voidDaemon);
+      return;
+    default:
+      console.log([
+        'void daemon 사용법:',
+        '  void daemon start    — voidemon(상주 알림 워커)을 백그라운드로 시작',
+        '  void daemon stop     — 실행 중인 voidemon 을 정상 종료',
+        '  void daemon status   — 실행 여부/PID/최근 로그 확인',
+        '  void daemon restart  — stop 후 start',
+      ].join('\n'));
+      return;
   }
 }
 
@@ -1896,6 +2148,28 @@ async function showMainMenu() {
 }
 
 // ── 진입점 ────────────────────────────────────────────────
+
+// ── voidemon "waker" ─────────────────────────────────────
+// 모든 void 실행(대화형 메뉴 포함)이 지나가는 가장 이른 공통 지점(main() 진입부, --sudo
+// 재실행 처리 이후, handleArgs/대화형 메뉴 등 무거운 작업 이전)에서 호출한다. --sudo 재실행
+// 분기(상단 50-60행)는 성공 시 자식이 이 지점에 도달하기 전에 process.exit 하므로 여기서는
+// "재실행된 이후의 실제 실행 경로" 단 한 곳만 지나가고, 이중 스폰은 발생하지 않는다.
+//
+// shouldEnsureDaemon(cmd) 가 'daemon'/'notify-worker' 서브커맨드만 걸러낸다(주석은
+// lib/voidDaemon.js 참조) — 그 외 모든 실행(툴 실행, prompt/tokens/sessions/host/notify,
+// 그리고 인자 없는 대화형 메뉴 진입 모두)은 조용히(silent) voidemon 이 떠 있는지 확인하고,
+// 없으면 detached 로 하나 띄운다. ensureDaemonRunning() 자체가 이미 fail-open 이지만
+// try/catch 로 한 번 더 감싸 belt-and-suspenders — void 실행을 절대 지연/실패시키지 않는다.
+//
+// 동작상 주의: 이 모델 하에서 `void daemon stop` 은 "일시적(transient)" 이 된다 — 다음
+// `void` 실행이 곧바로 되살린다. 이것이 사용자가 요청한 "매 실행마다 깨우는(waker)" 의도된
+// 의미론이며, 이를 끄는 옵트아웃 플래그는 의도적으로 두지 않는다(범위 밖 / 과설계 방지).
+try {
+  const voidDaemon = require('./lib/voidDaemon');
+  if (voidDaemon.shouldEnsureDaemon(argv[0])) {
+    voidDaemon.ensureDaemonRunning();
+  }
+} catch {}
 
 async function main() {
   if (argv.length > 0) {
