@@ -63,3 +63,17 @@ test('buildMailRestartLabel leaves the label untouched when there is no request 
   assert.equal(xtermFrame.buildMailRestartLabel('✳ claude  [alice]', null), '✳ claude  [alice]');
   assert.equal(xtermFrame.buildMailRestartLabel('✳ claude  [alice]', {}), '✳ claude  [alice]');
 });
+
+test('getInputProfile returns wrapperMouse true for codex and agy', () => {
+  const codexProfile = xtermFrame.getInputProfile('codex');
+  assert.equal(codexProfile.wrapperMouse, true);
+  assert.equal(codexProfile.mouseEnable, '\x1b[?1000h\x1b[?1006h');
+
+  const agyProfile = xtermFrame.getInputProfile('agy');
+  assert.equal(agyProfile.wrapperMouse, true);
+  assert.equal(agyProfile.mouseEnable, '\x1b[?1000h\x1b[?1006h');
+
+  const claudeProfile = xtermFrame.getInputProfile('claude');
+  assert.equal(claudeProfile.wrapperMouse, false);
+  assert.equal(claudeProfile.mouseEnable, '');
+});
