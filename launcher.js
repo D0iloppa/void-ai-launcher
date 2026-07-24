@@ -2092,19 +2092,26 @@ async function voidOmniPersistentCreateProfileFlow(omniProfile) {
   }
 
   const combosResult = omniProfile.listCombos();
-  if (!combosResult.ok || combosResult.combos.length === 0) {
+  const flatModels = [];
+  for (const combo of (combosResult.ok ? combosResult.combos : [])) {
+    for (const m of combo.models) {
+      flatModels.push({ model: m, comboName: combo.name });
+    }
+  }
+  if (flatModels.length === 0) {
     await ui.message(
       c.warn + '사용 가능한 콤보가 없습니다. omni(omniroute)에서 먼저 콤보를 설정한 뒤 다시 시도하세요.' + c.RESET
     );
     return;
   }
-  const comboItems = combosResult.combos.map((name, i) => ({
-    key: String(i + 1), label: name, desc: name,
+  const comboItems = flatModels.map((entry, i) => ({
+    key: String(i + 1), label: entry.model, desc: `combo: ${entry.comboName}`,
   }));
-  const comboSel = await ui.menu('void-omni-persistent 프로필 생성 — 콤보(모델) 선택', comboItems, { back: true });
+  const comboSel = await ui.menu('void-omni-persistent 프로필 생성 — 모델 선택', comboItems, { back: true });
   if (!comboSel) return;
-  const model = combosResult.combos[Number(comboSel.key) - 1];
-  if (!model) return;
+  const picked = flatModels[Number(comboSel.key) - 1];
+  if (!picked) return;
+  const model = picked.model;
 
   const result = omniProfile.createProfile({ name, toolCommand, omniroute_url: url, omniroute_api_key, model });
   if (!result.ok) {
