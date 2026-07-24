@@ -1928,6 +1928,18 @@ function voidPersistentAvailable() {
   }
 }
 
+// void-omni-persistent: switchProfile 과 동일한 defensive-require 게이트.
+// omniProfile.isAvailable() 자체는 항상 true(runTool 의 기존 graceful-degrade
+// 에 의존하므로 node-pty 사전 점검이 불필요)지만, require 실패(파일 손상 등)
+// 극단적 상황까지 여기서 함께 흡수한다.
+function omniPersistentAvailable() {
+  try {
+    return require('./lib/void-persistent/omniProfile').isAvailable();
+  } catch {
+    return false;
+  }
+}
+
 async function voidPersistentCreateProfileFlow(switchProfile) {
   const rawName = await ui.input('Persist 프로필 이름 (영문/숫자/-): ');
   if (rawName === null) return;
@@ -2045,16 +2057,172 @@ async function voidPersistentMenu() {
   }
 }
 
+// void-omni-persistent — experiments 서브메뉴의 형제 기능. void-persistent
+// (계정 풀 자동전환)와 달리 프로필마다 완전히 독립된 toolCommand+omniroute
+// 설정을 갖는다. 로직은 lib/void-persistent/omniProfile.js 에 전부 있다 —
+// 아래는 그 위에 얹은 UI뿐(voidPersistentMenu 계열과 동일 구조로 미러링).
+async function voidOmniPersistentCreateProfileFlow(omniProfile) {
+  const toolItems = omniProfile.SUPPORTED_TOOL_COMMANDS.map((cmd, i) => ({
+    key: String(i + 1), label: cmd, desc: cmd,
+  }));
+  const toolSel = await ui.menu('void-omni-persistent 프로필 생성 — CLI 선택', toolItems, { back: true });
+  if (!toolSel) return;
+  const toolCommand = omniProfile.SUPPORTED_TOOL_COMMANDS[Number(toolSel.key) - 1];
+  if (!toolCommand) return;
+
+  const rawName = await ui.input('프로필 이름 (영문/숫자/-): ');
+  if (rawName === null) return;
+  const name = rawName.trim();
+  if (!name) return;
+
+  const rawUrl = await ui.input('omniroute_url: ');
+  if (rawUrl === null) return;
+  const omniroute_url = rawUrl.trim();
+  if (!omniroute_url) {
+    await ui.message('omniroute_url 은 필수입니다.');
+    return;
+  }
+
+  const rawKey = await ui.input('omniroute_api_key: ', true);
+  if (rawKey === null) return;
+  const omniroute_api_key = rawKey.trim();
+  if (!omniroute_api_key) {
+    await ui.message('omniroute_api_key 는 필수입니다.');
+    return;
+  }
+
+  const result = omniProfile.createProfile({ name, toolCommand, omniroute_url, omniroute_api_key });
+  if (!result.ok) {
+    await ui.message(c.warn + result.error + c.RESET);
+    return;
+  }
+  await ui.message(
+    c.signal + 'void-omni-persistent 프로필 생성됨' + c.RESET + '\n\n' +
+    '  이름:  ' + c.text + result.profile.name + c.RESET + '\n' +
+    '  CLI:   ' + c.text + result.profile.toolCommand + c.RESET + '\n' +
+    '  경로:  ' + c.muted2 + result.configDir + c.RESET
+  );
+}
+
+async function voidOmniPersistentListMenu(omniProfile) {
+  while (true) {
+    const profiles = omniProfile.listProfiles();
+    if (profiles.length === 0) {
+      await ui.message('등록된 void-omni-persistent 프로필이 없습니다.');
+      return;
+    }
+    const items = profiles.map((p, i) => ({
+      key: String(i + 1), label: p.name, desc: `${p.toolCommand}  ${p.omniroute_url}`,
+    }));
+    const sel = await ui.menu('void-omni-persistent — 프로필 목록 (d: 삭제)', items, { back: true, enableDelete: true });
+    if (!sel) return;
+
+    if (sel.action === 'delete') {
+      const p = profiles[Number(sel.key) - 1];
+      if (p) {
+        const confirmSel = await ui.menu(`프로필 삭제: ${p.name}`, [
+          { key: '1', label: '삭제', desc: `${p.toolCommand}  ${p.omniroute_url}` },
+        ], { back: true });
+        if (confirmSel) {
+          const r = omniProfile.deleteProfile(p.name);
+          if (r.ok) await ui.message(c.signal + '삭제 완료' + c.RESET);
+          else await ui.message(c.warn + r.error + c.RESET);
+        }
+      }
+      continue;
+    }
+  }
+}
+
+async function voidOmniPersistentLaunch(omniProfile) {
+  const profiles = omniProfile.listProfiles();
+  if (profiles.length === 0) {
+    await ui.message('먼저 프로필을 생성하세요.');
+    return;
+  }
+  const items = profiles.map((p, i) => ({
+    key: String(i + 1), label: p.name, desc: `${p.toolCommand}  ${p.omniroute_url}`,
+  }));
+  const sel = await ui.menu('void-omni-persistent — 실행할 프로필 선택', items, { back: true });
+  if (!sel) return;
+  const profile = profiles[Number(sel.key) - 1];
+  if (!profile) return;
+
+  const tool = config.tools.find(t => (t.command || '').toLowerCase() === profile.toolCommand);
+  if (!tool) {
+    await ui.message(`${profile.toolCommand} 도구가 설정되어 있지 않습니다.`);
+    return;
+  }
+  const result = await omniProfile.runOmniPersistentSession(tool, profile, c, config);
+  if (!result || !result.ok) {
+    await ui.message(c.warn + String((result && result.error) || '알 수 없는 오류') + c.RESET);
+  }
+}
+
+async function voidOmniPersistentMenu() {
+  let omniProfile;
+  try {
+    omniProfile = require('./lib/void-persistent/omniProfile');
+  } catch (err) {
+    await ui.message(
+      c.warn + 'void-omni-persistent 모듈을 불러올 수 없습니다.' + c.RESET + '\n\n' +
+      '  ' + c.muted2 + String(err && err.message || err) + c.RESET
+    );
+    return;
+  }
+
+  while (true) {
+    const profiles = omniProfile.listProfiles();
+    const items = [
+      { key: '1', label: '프로필 생성', desc: 'CLI 선택 + omniroute_url + omniroute_api_key' },
+      { key: '2', label: '프로필 목록/삭제', desc: `${profiles.length}개 등록됨`, disabled: profiles.length === 0 },
+      { key: '3', label: '실행', desc: profiles.length > 0 ? '프로필 선택 후 실행' : '먼저 프로필을 생성하세요', disabled: profiles.length === 0 },
+    ];
+
+    const sel = await ui.menu('void-omni-persistent — omniroute 프로필 관리', items, { back: true });
+    if (!sel) return;
+
+    switch (sel.key) {
+      case '1': await voidOmniPersistentCreateProfileFlow(omniProfile); break;
+      case '2': await voidOmniPersistentListMenu(omniProfile); break;
+      case '3': await voidOmniPersistentLaunch(omniProfile); break;
+    }
+  }
+}
+
+// 고급 메뉴의 'E' 항목은 더 이상 void-persistent 를 직접 열지 않고, 이 서브메뉴를
+// 거쳐 void-omni-persistent/void-persistent 중 선택하게 한다. voidPersistentMenu()
+// 는 그대로 두고 호출 경로만 바뀐다.
+async function showExperimentsMenu() {
+  const items = [
+    { key: '1', label: 'void-omni-persistent', desc: 'omniroute 프로필(CLI별 BASE_URL/API_KEY) 관리' },
+    { key: '2', label: 'void-persistent', desc: '계정 자동 전환' },
+  ];
+
+  while (true) {
+    const sel = await ui.menu('Experiments', items, { back: true });
+    if (!sel) return;
+
+    switch (sel.key) {
+      case '1': await voidOmniPersistentMenu(); break;
+      case '2': await voidPersistentMenu(); break;
+    }
+  }
+}
+
 async function showAdvancedMenu(toolNames, tokenOpts, sessionOpts, hasTokens, hasSessions, topRows) {
   const items = [
     { key: 'A', label: 'Personal Assistant', desc: '상주 AI 어시스턴트 프로필 관리 및 채팅' },
     { key: '1', label: '익명 모드', options: toolNames },
     { key: '2', label: '세션 실행', desc: '도구 선택 후 세션 선택', disabled: !hasSessions },
   ];
-  // void-persistent: 가용성 게이트를 통과했을 때만 노출 — 실패해도 나머지
-  // 고급 메뉴는 그대로 동작한다(defensive require, 위 voidPersistentAvailable 참고).
-  if (voidPersistentAvailable()) {
-    items.push({ key: 'E', label: 'void-persistent', desc: '계정 자동 전환' });
+  // experiments: void-persistent 또는 void-omni-persistent 중 하나라도 쓸 수
+  // 있으면 노출한다 — void-omni-persistent(omniProfile.isAvailable())는
+  // runTool 의 기존 graceful-degrade 위에서 동작하므로 항상 true 이지만,
+  // 모듈 require 자체가 실패하는 극단적 상황까지 대비해 defensive try/catch 로
+  // 감싼다(voidPersistentAvailable() 과 동일한 패턴).
+  if (voidPersistentAvailable() || omniPersistentAvailable()) {
+    items.push({ key: 'E', label: 'experiments', desc: '실험적 부가 기능' });
   }
 
   while (true) {
@@ -2076,7 +2244,7 @@ async function showAdvancedMenu(toolNames, tokenOpts, sessionOpts, hasTokens, ha
         break;
       }
       case 'E': {
-        await voidPersistentMenu();
+        await showExperimentsMenu();
         break;
       }
     }
