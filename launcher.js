@@ -1010,7 +1010,13 @@ async function showUpdateMenu() {
   ui.exitAltScreen();
   ui.showCursor();
   const { spawnSync: _sx } = require('child_process');
-  const res = _sx(process.execPath, [__filename], { stdio: 'inherit' });
+  // cwd 를 이름으로 다시 resolve해서 refresh(`cd ./` 와 동일한 발상) — WSL 등에서
+  // cwd의 디렉터리 inode 가 교체/삭제되면 그대로 물려받은 cwd 가 stale 해져
+  // 재기동이 알 수 없는 이유로 실패하는 걸 방지.
+  let dir;
+  try { dir = process.cwd(); } catch { dir = process.env.PWD || require('os').homedir(); }
+  try { process.chdir(dir); } catch { dir = require('os').homedir(); try { process.chdir(dir); } catch {} }
+  const res = _sx(process.execPath, [__filename], { stdio: 'inherit', cwd: dir });
   process.exit(res.status ?? 0);
 }
 
@@ -1028,7 +1034,13 @@ async function showReboot() {
   ui.exitAltScreen();
   ui.showCursor();
   const { spawnSync: _sx } = require('child_process');
-  const res = _sx(process.execPath, [__filename], { stdio: 'inherit' });
+  // cwd 를 이름으로 다시 resolve해서 refresh(`cd ./` 와 동일한 발상) — WSL 등에서
+  // cwd의 디렉터리 inode 가 교체/삭제되면 그대로 물려받은 cwd 가 stale 해져
+  // 재기동이 알 수 없는 이유로 실패하는 걸 방지.
+  let dir;
+  try { dir = process.cwd(); } catch { dir = process.env.PWD || require('os').homedir(); }
+  try { process.chdir(dir); } catch { dir = require('os').homedir(); try { process.chdir(dir); } catch {} }
+  const res = _sx(process.execPath, [__filename], { stdio: 'inherit', cwd: dir });
   process.exit(res.status ?? 0);
 }
 
