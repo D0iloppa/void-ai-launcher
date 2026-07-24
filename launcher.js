@@ -2107,22 +2107,56 @@ async function voidOmniPersistentCreateProfileFlow(omniProfile) {
   const comboItems = flatModels.map((entry, i) => ({
     key: String(i + 1), label: entry.model, desc: `combo: ${entry.comboName}`,
   }));
-  const comboSel = await ui.menu('void-omni-persistent 프로필 생성 — 모델 선택', comboItems, { back: true });
-  if (!comboSel) return;
-  const picked = flatModels[Number(comboSel.key) - 1];
-  if (!picked) return;
-  const model = picked.model;
 
-  const result = omniProfile.createProfile({ name, toolCommand, omniroute_url: url, omniroute_api_key, model });
+  let result;
+  if (toolCommand === 'codex') {
+    const comboSel = await ui.menu('void-omni-persistent 프로필 생성 — 모델 선택', comboItems, { back: true });
+    if (!comboSel) return;
+    const picked = flatModels[Number(comboSel.key) - 1];
+    if (!picked) return;
+    const model = picked.model;
+
+    result = omniProfile.createProfile({ name, toolCommand, omniroute_url: url, omniroute_api_key, model });
+  } else {
+    // claude: Opus/Sonnet/Haiku/Fable 네 슬롯 각각에 모델을 배정한다 — 같은
+    // flatModels/comboItems 목록을 재사용, 재조회 없이 네 번 순차 선택.
+    const slots = [
+      { field: 'opusModel', title: 'void-omni-persistent 프로필 생성 — Opus 슬롯에 배정할 모델' },
+      { field: 'sonnetModel', title: 'void-omni-persistent 프로필 생성 — Sonnet 슬롯에 배정할 모델' },
+      { field: 'haikuModel', title: 'void-omni-persistent 프로필 생성 — Haiku 슬롯에 배정할 모델' },
+      { field: 'fableModel', title: 'void-omni-persistent 프로필 생성 — Fable 슬롯에 배정할 모델' },
+    ];
+    const picks = {};
+    for (const slot of slots) {
+      const comboSel = await ui.menu(slot.title, comboItems, { back: true });
+      if (!comboSel) return;
+      const picked = flatModels[Number(comboSel.key) - 1];
+      if (!picked) return;
+      picks[slot.field] = picked.model;
+    }
+
+    result = omniProfile.createProfile({
+      name, toolCommand, omniroute_url: url, omniroute_api_key,
+      opusModel: picks.opusModel, sonnetModel: picks.sonnetModel,
+      haikuModel: picks.haikuModel, fableModel: picks.fableModel,
+    });
+  }
+
   if (!result.ok) {
     await ui.message(c.warn + result.error + c.RESET);
     return;
   }
+  const modelLines = toolCommand === 'codex'
+    ? '  모델:  ' + c.text + result.profile.model + c.RESET + '\n'
+    : '  Opus:   ' + c.text + result.profile.opusModel + c.RESET + '\n' +
+      '  Sonnet: ' + c.text + result.profile.sonnetModel + c.RESET + '\n' +
+      '  Haiku:  ' + c.text + result.profile.haikuModel + c.RESET + '\n' +
+      '  Fable:  ' + c.text + result.profile.fableModel + c.RESET + '\n';
   await ui.message(
     c.signal + 'void-omni-persistent 프로필 생성됨' + c.RESET + '\n\n' +
     '  이름:  ' + c.text + result.profile.name + c.RESET + '\n' +
     '  CLI:   ' + c.text + result.profile.toolCommand + c.RESET + '\n' +
-    '  모델:  ' + c.text + result.profile.model + c.RESET + '\n' +
+    modelLines +
     '  경로:  ' + c.muted2 + result.configDir + c.RESET
   );
 }
