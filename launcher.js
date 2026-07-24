@@ -821,6 +821,7 @@ async function showVoidSettingsScreen(topRows) {
   const emojiOpts  = ['켜짐', '꺼짐'];
 
   const updateCheckOpts = ['켜짐', '꺼짐'];
+  const refreshIntervalOpts = ['30', '60', '120', '300'];
 
   const s = config.settings || {};
   const curHpad  = typeof s.wrapper_hpad === 'number' ? s.wrapper_hpad : 2;
@@ -828,6 +829,8 @@ async function showVoidSettingsScreen(topRows) {
   const curEmoji = typeof s.double_width_emoji === 'boolean' ? s.double_width_emoji : true;
   // 기본값 true — 명시적으로 false 로 꺼둔 경우에만 꺼짐으로 표시
   const curUpdateCheck = s.update_check_on_start !== false;
+  const curRefreshInterval = typeof s.omniroute_usage_refresh_interval_sec === 'number'
+    ? s.omniroute_usage_refresh_interval_sec : 60;
 
   const items = [
     { key: '1', label: '테마', options: themeNames,
@@ -838,6 +841,8 @@ async function showVoidSettingsScreen(topRows) {
       optionIndex: Math.max(0, vpadOpts.indexOf(String(curVpad))) },
     { key: '4', label: '이모지 2칸 폭', options: emojiOpts, optionIndex: curEmoji ? 0 : 1 },
     { key: '5', label: '시작 시 업데이트 확인', options: updateCheckOpts, optionIndex: curUpdateCheck ? 0 : 1 },
+    { key: '6', label: 'omniroute 사용량 갱신 주기', options: refreshIntervalOpts,
+      optionIndex: Math.max(0, refreshIntervalOpts.indexOf(String(curRefreshInterval))) },
     { key: 's', label: '저장', desc: '변경 사항 저장 및 즉시 적용' },
   ];
 
@@ -867,6 +872,7 @@ async function showVoidSettingsScreen(topRows) {
       const vpad  = parseInt(vpadOpts[items[2].optionIndex], 10);
       const emoji = items[3].optionIndex === 0;
       const updateCheckOnStart = items[4].optionIndex === 0;
+      const refreshIntervalSec = parseInt(refreshIntervalOpts[items[5].optionIndex], 10);
 
       // 기존 테마 문서를 스프레드 후 name만 덮어씀 — 그렇지 않으면 사용자가
       // 이전에 설정해둔 theme.colors 개별 오버라이드(loadTheme()이 지원하는
@@ -878,6 +884,7 @@ async function showVoidSettingsScreen(topRows) {
         ...configDb.getSettings(),
         wrapper_hpad: hpad, wrapper_vpad: vpad, double_width_emoji: emoji,
         update_check_on_start: updateCheckOnStart,
+        omniroute_usage_refresh_interval_sec: refreshIntervalSec,
       });
       config.theme    = configDb.getTheme();
       config.settings = configDb.getSettings();
@@ -917,7 +924,7 @@ async function showSettingsMenu(topRows) {
         disabled: getSessions().length === 0,
       },
       { key: '6', label: 'Agent CLI 관리', desc: '설치 상태 확인 및 설치' },
-      { key: '7', label: '사용량 조회', desc: 'Claude/Codex 사용량 확인' },
+      { key: '7', label: '사용량 조회', desc: 'Claude/Codex/agy 사용량 확인' },
       { key: '8', label: '세션 동기화', desc: '다른 기기와 네임드 세션을 WebSocket으로 동기화' },
       { key: '9', label: '업데이트 확인/적용', desc: 'git 기반 자동 업데이트 확인 및 적용' },
       { key: 'x', label: 'experiments', desc: '실험적 부가 도구 (omniroute 등)' },
@@ -1044,10 +1051,10 @@ async function showReboot() {
   process.exit(res.status ?? 0);
 }
 
-// 사용량 조회 — Claude/Codex 세션·주간 rate-limit 사용률을 읽기 전용으로 표시.
+// 사용량 조회 — Claude/Codex/agy 세션·주간 rate-limit 사용률을 읽기 전용으로 표시.
 // 즉시 조회(열 때) + 수동 새로고침만 제공하며 백그라운드 폴링은 두지 않는다.
 async function showUsageMenu() {
-  const { getClaudeUsage, getCodexUsage } = require('./lib/usageMeter');
+  const { getClaudeUsage, getCodexUsage, getAgyUsage } = require('./lib/usageMeter');
   const { getWarmupTargets } = require('./lib/usageWarmup');
   const { getUsageCacheEntry } = require('./lib/usageDb');
 
@@ -1111,7 +1118,7 @@ async function showUsageMenu() {
     return lines;
   };
 
-  const toolLabelFor = (toolCommand) => toolCommand === 'codex' ? 'Codex' : 'Claude';
+  const toolLabelFor = (toolCommand) => toolCommand === 'codex' ? 'Codex' : toolCommand === 'agy' ? 'agy' : 'Claude';
   const titleFor = (target) => target.sessionKey === 'default'
     ? toolLabelFor(target.toolCommand)
     : `${toolLabelFor(target.toolCommand)} · ${target.sessionKey}`;
@@ -1147,7 +1154,9 @@ async function showUsageMenu() {
         if (myGen !== refreshGen) return;
         view.setStatus(`새로고침 중 (${i + 1}/${targets.length})...`);
         const target = targets[i];
-        const getUsage = target.toolCommand === 'codex' ? getCodexUsage : getClaudeUsage;
+        const getUsage = target.toolCommand === 'codex' ? getCodexUsage
+          : target.toolCommand === 'agy' ? getAgyUsage
+          : getClaudeUsage;
         const overrides = { configDir: target.configDir || undefined, sessionKey: target.sessionKey };
         results[i] = await getUsage(config, overrides)
           .catch(err => ({ status: 'error', error: String(err && err.message || err) }));
@@ -2091,6 +2100,12 @@ async function showCommandMode() {
 // ── 메인 메뉴 ─────────────────────────────────────────────
 
 async function showMainMenu() {
+  // 홈 화면 진입/복귀마다 타이틀을 void 로 재설정한다 — 시작 시 셸이 남긴
+  // 타이틀(예: `cd ./ && void` 이후의 "cd")이나 방금 종료한 툴 세션의
+  // void-<cli>[session] 타이틀이 홈 화면까지 남아있는 문제를 덮어써 해결한다.
+  let cwdName = '';
+  try { cwdName = path.basename(process.cwd()); } catch {}
+  setTermTitle(cwdName ? `void — ${cwdName}` : 'void');
   const last = getLast();
   const lastDesc = last ? `${describeLaunch(last)} · ${timeSince(last.timestamp)}` : null;
   const toolNames = config.tools.map(t => t.name);
@@ -2155,6 +2170,14 @@ async function showMainMenu() {
     }
     case 'h': {
       await ui.scrollableMessage('도움말', getHelpText());
+      return showMainMenu();
+    }
+    case 'U': {
+      await showUsageMenu();
+      return showMainMenu();
+    }
+    case 'R': {
+      await showReboot();
       return showMainMenu();
     }
     case 'x':
