@@ -920,6 +920,7 @@ async function showSettingsMenu(topRows) {
       { key: '7', label: '사용량 조회', desc: 'Claude/Codex 사용량 확인' },
       { key: '8', label: '세션 동기화', desc: '다른 기기와 네임드 세션을 WebSocket으로 동기화' },
       { key: '9', label: '업데이트 확인/적용', desc: 'git 기반 자동 업데이트 확인 및 적용' },
+      { key: 'x', label: 'experiments', desc: '실험적 부가 도구 (omniroute 등)' },
       { key: 'r', label: '재시작 (reboot)', desc: 'git 업데이트 없이 현재 로컬 코드로 프로세스 재기동' },
     ];
 
@@ -944,6 +945,8 @@ async function showSettingsMenu(topRows) {
       await require('./lib/sync').syncMenu(config, c);
     } else if (sel.key === '9') {
       await showUpdateMenu();
+    } else if (sel.key === 'x') {
+      await require('./lib/experiments').experimentsMenu(config, c);
     } else if (sel.key === 'r') {
       await showReboot();
     }
