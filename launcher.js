@@ -821,7 +821,6 @@ async function showVoidSettingsScreen(topRows) {
   const emojiOpts  = ['켜짐', '꺼짐'];
 
   const updateCheckOpts = ['켜짐', '꺼짐'];
-  const refreshIntervalOpts = ['30', '60', '120', '300'];
 
   const s = config.settings || {};
   const curHpad  = typeof s.wrapper_hpad === 'number' ? s.wrapper_hpad : 2;
@@ -829,8 +828,6 @@ async function showVoidSettingsScreen(topRows) {
   const curEmoji = typeof s.double_width_emoji === 'boolean' ? s.double_width_emoji : true;
   // 기본값 true — 명시적으로 false 로 꺼둔 경우에만 꺼짐으로 표시
   const curUpdateCheck = s.update_check_on_start !== false;
-  const curRefreshInterval = typeof s.omniroute_usage_refresh_interval_sec === 'number'
-    ? s.omniroute_usage_refresh_interval_sec : 60;
 
   const items = [
     { key: '1', label: '테마', options: themeNames,
@@ -841,8 +838,6 @@ async function showVoidSettingsScreen(topRows) {
       optionIndex: Math.max(0, vpadOpts.indexOf(String(curVpad))) },
     { key: '4', label: '이모지 2칸 폭', options: emojiOpts, optionIndex: curEmoji ? 0 : 1 },
     { key: '5', label: '시작 시 업데이트 확인', options: updateCheckOpts, optionIndex: curUpdateCheck ? 0 : 1 },
-    { key: '6', label: 'omniroute 사용량 갱신 주기', options: refreshIntervalOpts,
-      optionIndex: Math.max(0, refreshIntervalOpts.indexOf(String(curRefreshInterval))) },
     { key: 's', label: '저장', desc: '변경 사항 저장 및 즉시 적용' },
   ];
 
@@ -872,7 +867,6 @@ async function showVoidSettingsScreen(topRows) {
       const vpad  = parseInt(vpadOpts[items[2].optionIndex], 10);
       const emoji = items[3].optionIndex === 0;
       const updateCheckOnStart = items[4].optionIndex === 0;
-      const refreshIntervalSec = parseInt(refreshIntervalOpts[items[5].optionIndex], 10);
 
       // 기존 테마 문서를 스프레드 후 name만 덮어씀 — 그렇지 않으면 사용자가
       // 이전에 설정해둔 theme.colors 개별 오버라이드(loadTheme()이 지원하는
@@ -884,7 +878,6 @@ async function showVoidSettingsScreen(topRows) {
         ...configDb.getSettings(),
         wrapper_hpad: hpad, wrapper_vpad: vpad, double_width_emoji: emoji,
         update_check_on_start: updateCheckOnStart,
-        omniroute_usage_refresh_interval_sec: refreshIntervalSec,
       });
       config.theme    = configDb.getTheme();
       config.settings = configDb.getSettings();
