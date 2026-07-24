@@ -2197,18 +2197,18 @@ async function voidOmniPersistentMenu() {
   while (true) {
     const profiles = omniProfile.listProfiles();
     const items = [
-      { key: '1', label: '프로필 생성', desc: 'CLI 선택 + omniroute_url + omniroute_api_key' },
+      { key: '1', label: '실행', desc: profiles.length > 0 ? '프로필 선택 후 실행' : '먼저 프로필을 생성하세요', disabled: profiles.length === 0 },
       { key: '2', label: '프로필 목록/삭제', desc: `${profiles.length}개 등록됨`, disabled: profiles.length === 0 },
-      { key: '3', label: '실행', desc: profiles.length > 0 ? '프로필 선택 후 실행' : '먼저 프로필을 생성하세요', disabled: profiles.length === 0 },
+      { key: '3', label: '프로필 생성', desc: 'CLI 선택 + omniroute_url + omniroute_api_key' },
     ];
 
     const sel = await ui.menu('void-omni-persistent — omniroute 프로필 관리', items, { back: true });
     if (!sel) return;
 
     switch (sel.key) {
-      case '1': await voidOmniPersistentCreateProfileFlow(omniProfile); break;
+      case '1': await voidOmniPersistentLaunch(omniProfile); break;
       case '2': await voidOmniPersistentListMenu(omniProfile); break;
-      case '3': await voidOmniPersistentLaunch(omniProfile); break;
+      case '3': await voidOmniPersistentCreateProfileFlow(omniProfile); break;
     }
   }
 }
