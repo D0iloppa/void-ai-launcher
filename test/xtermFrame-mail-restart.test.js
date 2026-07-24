@@ -77,3 +77,15 @@ test('getInputProfile returns wrapperMouse true for codex and agy', () => {
   assert.equal(claudeProfile.wrapperMouse, false);
   assert.equal(claudeProfile.mouseEnable, '');
 });
+
+test('getInputProfile forces wrapperMouse true for claude when forceWrapperMouse is set (void-omni-persistent), but leaves plain claude untouched', () => {
+  const forcedClaudeProfile = xtermFrame.getInputProfile('claude', { forceWrapperMouse: true });
+  assert.equal(forcedClaudeProfile.wrapperMouse, true);
+  assert.equal(forcedClaudeProfile.mouseEnable, '\x1b[?1000h\x1b[?1006h');
+
+  // No second argument at all — normal claude sessions must keep their
+  // existing behavior exactly as before (zero regression).
+  const plainClaudeProfile = xtermFrame.getInputProfile('claude');
+  assert.equal(plainClaudeProfile.wrapperMouse, false);
+  assert.equal(plainClaudeProfile.mouseEnable, '');
+});
