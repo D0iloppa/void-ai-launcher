@@ -2075,12 +2075,19 @@ async function voidOmniPersistentCreateProfileFlow(omniProfile) {
   const name = rawName.trim();
   if (!name) return;
 
-  const rawUrl = await ui.input('omniroute_url: ');
-  if (rawUrl === null) return;
-  const omniroute_url = rawUrl.trim();
-  if (!omniroute_url) {
-    await ui.message('omniroute_url 은 필수입니다.');
-    return;
+  let url;
+  while (true) {
+    const rawUrl = await ui.input(`omniroute_url (기본값: ${omniProfile.DEFAULT_OMNIROUTE_URL}): `);
+    if (rawUrl === null) return;
+    url = rawUrl.trim() || omniProfile.DEFAULT_OMNIROUTE_URL;
+
+    ui.flashMessage('omniroute 헬스체크 확인 중...', 400);
+    const health = await omniProfile.checkOmnirouteHealth(url);
+    if (!health.ok) {
+      await ui.message(c.warn + `omniroute 연결 확인 실패: ${health.error}` + c.RESET);
+      continue;
+    }
+    break;
   }
 
   const rawKey = await ui.input('omniroute_api_key: ', true);
@@ -2091,7 +2098,22 @@ async function voidOmniPersistentCreateProfileFlow(omniProfile) {
     return;
   }
 
-  const result = omniProfile.createProfile({ name, toolCommand, omniroute_url, omniroute_api_key });
+  const combosResult = omniProfile.listCombos();
+  if (!combosResult.ok || combosResult.combos.length === 0) {
+    await ui.message(
+      c.warn + '사용 가능한 콤보가 없습니다. omni(omniroute)에서 먼저 콤보를 설정한 뒤 다시 시도하세요.' + c.RESET
+    );
+    return;
+  }
+  const comboItems = combosResult.combos.map((name, i) => ({
+    key: String(i + 1), label: name, desc: name,
+  }));
+  const comboSel = await ui.menu('void-omni-persistent 프로필 생성 — 콤보(모델) 선택', comboItems, { back: true });
+  if (!comboSel) return;
+  const model = combosResult.combos[Number(comboSel.key) - 1];
+  if (!model) return;
+
+  const result = omniProfile.createProfile({ name, toolCommand, omniroute_url: url, omniroute_api_key, model });
   if (!result.ok) {
     await ui.message(c.warn + result.error + c.RESET);
     return;
@@ -2100,6 +2122,7 @@ async function voidOmniPersistentCreateProfileFlow(omniProfile) {
     c.signal + 'void-omni-persistent 프로필 생성됨' + c.RESET + '\n\n' +
     '  이름:  ' + c.text + result.profile.name + c.RESET + '\n' +
     '  CLI:   ' + c.text + result.profile.toolCommand + c.RESET + '\n' +
+    '  모델:  ' + c.text + result.profile.model + c.RESET + '\n' +
     '  경로:  ' + c.muted2 + result.configDir + c.RESET
   );
 }
